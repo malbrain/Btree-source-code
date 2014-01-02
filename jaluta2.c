@@ -1,5 +1,5 @@
 // jaluta's balanced B-Link tree algorithms
-// 26 APR 2013
+// 26 NOV 2013
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -979,6 +979,9 @@ int reuse;
 	if( !bt->mapped_io ) {
 		if( bt_update(bt, page, new_page) )
 			return 0;	//don't unlock on error
+
+		// unlock page zero 
+
 		if ( bt_unlockpage(bt, ALLOC_page, BtLockWrite) )
 			return 0;
 

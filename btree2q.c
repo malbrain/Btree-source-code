@@ -972,6 +972,9 @@ int reuse;
 	if( !bt->mapped_io ) {
 		if( bt_update(bt, page, new_page) )
 			return 0;	//don't unlock on error
+
+		// unlock page zero 
+
 		if ( bt_unlockpage(bt, ALLOC_page, BtLockWrite) )
 			return 0;
 
