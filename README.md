@@ -22,4 +22,4 @@ or
 
 cl /D STANDALONE threads2h.c
 
-Please see the project home page at code.google.com/p/high-concurrency-btree
+Please see the project wiki page for documentation
