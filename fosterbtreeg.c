@@ -142,10 +142,10 @@ typedef struct Page {
 	BtSpinLatch readwr[1];		// read/write lock
 	BtSpinLatch access[1];		// access intent lock
 	BtSpinLatch parent[1];		// parent SMO lock
+	ushort foster;				// count of foster children
 	uint cnt;					// count of keys in page
 	uint act;					// count of active keys
 	uint min;					// next key offset
-	uint foster;				// count of foster children
 	unsigned char bits;			// page size in bits
 	unsigned char lvl:6;		// level of page
 	unsigned char kill:1;		// page is being deleted
@@ -159,7 +159,7 @@ typedef struct {
 	unsigned long long int lru;	// number of times accessed
 	uid  basepage;				// mapped base page number
 	char *map;					// mapped memory pointer
-	ushort pin;					// mapped page pin counter
+	volatile ushort pin;		// mapped page pin counter
 	ushort slot;				// slot index in this array
 	void *hashprev;				// previous pool entry for the same hash idx
 	void *hashnext;				// next pool entry for the same hash idx
@@ -181,11 +181,11 @@ typedef struct {
 #else
 	HANDLE idx;
 #endif
-	ushort poolcnt;				// highest page pool node in use
+	volatile ushort poolcnt;	// highest page pool node in use
+	volatile ushort evicted;	// last evicted hash table slot
 	ushort poolmax;				// highest page pool node allocated
 	ushort poolmask;			// total size of pages in mmap segment - 1
 	ushort hashsize;			// size of Hash Table for pool entries
-	ushort evicted;				// last evicted hash table slot
 	ushort *hash;				// hash table of pool entries
 	BtPool *pool;				// memory pool page segments
 	BtSpinLatch *latch;			// latches for pool hash slots
@@ -319,19 +319,26 @@ ushort prev;
 
   do {
 #ifdef unix
-	do prev = __sync_fetch_and_or((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	while( __sync_fetch_and_or((ushort *)latch, Mutex) & Mutex )
+		sched_yield();
 #else
-	do prev = _InterlockedOr16((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	while( _InterlockedOr16((ushort *)latch, Mutex) & Mutex )
+		SwitchToThread();
 #endif
-
-	//  see if exclusive request is pending, or granted
+	//  see if exclusive request is granted or pending
 
 	if( prev = !(latch->exclusive | latch->pending) )
-		latch->share++;
+#ifdef unix
+		__sync_fetch_and_add((ushort *)latch, Share);
+#else
+		_InterlockedExchangeAdd16 ((ushort *)latch, Share);
+#endif
 
-	latch->mutex = 0;
+#ifdef unix
+	__sync_fetch_and_and ((ushort *)latch, ~Mutex);
+#else
+	_InterlockedAnd16((ushort *)latch, ~Mutex);
+#endif
 
 	if( prev )
 		return;
@@ -350,16 +357,24 @@ ushort prev;
 
   do {
 #ifdef  unix
-	do prev = __sync_fetch_and_or((ushort *)latch, (Pending | Mutex));
-	while( prev & Mutex );
+	while( __sync_fetch_and_or((ushort *)latch, Mutex | Pending) & Mutex )
+		sched_yield();
 #else
-	do prev = _InterlockedOr16((ushort *)latch, (Pending | Mutex));
-	while( prev & Mutex );
+	while( _InterlockedOr16((ushort *)latch, Mutex | Pending) & Mutex )
+		SwitchToThread();
 #endif
 	if( prev = !(latch->share | latch->exclusive) )
-		latch->exclusive = 1, latch->pending = 0;
+#ifdef unix
+		__sync_fetch_and_or((ushort *)latch, Write);
+#else
+		_InterlockedOr16((ushort *)latch, Write);
+#endif
 
-	latch->mutex = 0;
+#ifdef unix
+	__sync_fetch_and_and ((ushort *)latch, ~(Mutex | Pending));
+#else
+	_InterlockedAnd16((ushort *)latch, ~(Mutex | Pending));
+#endif
 
 	if( prev )
 		return;
@@ -381,18 +396,20 @@ int bt_spinwritetry(BtSpinLatch *latch)
 ushort prev;
 
 #ifdef unix
-	do prev = __sync_fetch_and_or((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	if( prev = __sync_fetch_and_or((ushort *)latch, Mutex), prev & Mutex )
+		return 0;
 #else
-	do prev = _InterlockedOr16((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	if( prev = _InterlockedOr16((ushort *)latch, Mutex), prev & Mutex )
+		return 0;
 #endif
 	//	take write access if all bits are clear
 
 	if( !prev )
-		latch->exclusive = 1;
-
-	latch->mutex = 0;
+#ifdef unix
+		__sync_fetch_and_or ((ushort *)latch, Write);
+#else
+		_InterlockedOr16((ushort *)latch, Write);
+#endif
 	return !prev;
 }
 
@@ -400,36 +417,22 @@ ushort prev;
 
 void bt_spinreleasewrite(BtSpinLatch *latch)
 {
-ushort prev;
-
 #ifdef unix
-	do prev = __sync_fetch_and_or((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	__sync_fetch_and_and ((ushort *)latch, ~Write);
 #else
-	do prev = _InterlockedOr16((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	_InterlockedAnd16((ushort *)latch, ~Write);
 #endif
-
-	latch->exclusive = 0;
-	latch->mutex = 0;
 }
 
 //	decrement reader count
 
 void bt_spinreleaseread(BtSpinLatch *latch)
 {
-ushort prev;
-
 #ifdef unix
-	do prev = __sync_fetch_and_or((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	__sync_fetch_and_add((ushort *)latch, -Share);
 #else
-	do prev = _InterlockedOr16((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	_InterlockedExchangeAdd16 ((ushort *)latch, -Share);
 #endif
-
-	latch->share--;
-	latch->mutex = 0;
 }
 
 void bt_mgrclose (BtMgr *mgr)
@@ -1138,11 +1141,12 @@ uid bt_newpage(BtDb *bt, BtPage page)
 {
 uid new_page;
 BtPage pmap;
+int subpage;
 int reuse;
 
-	//	lock allocation page
+	// lock page zero
 
-	if ( bt_lockpage(bt, ALLOC_page, BtLockWrite, &bt->alloc) )
+	if( bt_lockpage(bt, ALLOC_page, BtLockWrite, &bt->alloc) )
 		return 0;
 
 	// use empty chain first
@@ -1160,6 +1164,7 @@ int reuse;
 		bt_putid(bt->alloc->right, new_page+1);
 		reuse = 0;
 	}
+
 #ifdef unix
 	memset(bt->zero, 0, 3 * sizeof(BtSpinLatch)); // clear locks
 	memcpy((char *)bt->zero + 3 * sizeof(BtSpinLatch), (char *)page + 3 * sizeof(BtSpinLatch), bt->mgr->page_size - 3 * sizeof(BtSpinLatch));
@@ -1182,7 +1187,9 @@ int reuse;
 	if( bt_lockpage(bt, new_page, BtLockWrite, &pmap) )
 		return 0;
 
-	memcpy(pmap, page, bt->mgr->page_size);
+	//  copy source page, but leave latch area intact
+
+	memcpy((char *)pmap + 3 * sizeof(BtSpinLatch), (char *)page + 3 * sizeof(BtSpinLatch), bt->mgr->page_size - 3 * sizeof(BtSpinLatch));
 
 	if( bt_unlockpage (bt, new_page, BtLockWrite) )
 		return 0;

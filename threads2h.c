@@ -86,9 +86,10 @@ typedef enum{
 //	mode & definition for latch implementation
 
 enum {
-	Write = 1,
-	Pending = 2,
-	Share = 4
+	Mutex = 1,
+	Write = 2,
+	Pending = 4,
+	Share = 8
 } LockMode;
 
 // exclusive is set for write access
@@ -96,9 +97,10 @@ enum {
 // grant write lock when share == 0
 
 typedef struct {
-	volatile uint exclusive:1;
-	volatile uint request:1;
-	volatile uint share:30;
+	volatile ushort mutex:1;
+	volatile ushort exclusive:1;
+	volatile ushort pending:1;
+	volatile ushort share:13;
 } BtLatch;
 
 typedef struct {
@@ -594,6 +596,8 @@ BtDb *bt = malloc (sizeof(*bt));
 	bt->frame = (BtPage)bt->mem;
 	bt->zero = (BtPage)(bt->mem + 1 * mgr->page_size);
 	bt->cursor = (BtPage)(bt->mem + 2 * mgr->page_size);
+
+	memset (bt->zero, 0, mgr->page_size);
 	return bt;
 }
 
@@ -623,89 +627,75 @@ int ans;
 
 void bt_readlock(BtLatch *latch)
 {
+ushort prev;
+
   do {
-	//  see if exclusive request is pending, or granted
-
-	if( !(volatile int)latch->request && !(volatile int)latch->exclusive ) {
-	//  add one to counter, check write bit
+	//	obtain latch mutex
 #ifdef unix
-	  if( ~__sync_fetch_and_add((volatile int *)latch, Share) & Write )
-		return;
+	if( __sync_fetch_and_or((ushort *)latch, Mutex) & Mutex )
+		continue;
 #else
-	  if( ~_InterlockedExchangeAdd((volatile int *)latch, Share) & Write )
-		return;
+	if( prev = _InterlockedOr16((ushort *)latch, Mutex) & Mutex )
+		continue;
 #endif
-	//  didn't get latch, reduce counter by one
+	//  see if exclusive request is granted or pending
+
+	if( prev = !(latch->exclusive | latch->pending) )
+#ifdef unix
+		__sync_fetch_and_add((ushort *)latch, Share);
+#else
+		_InterlockedExchangeAdd16 ((ushort *)latch, Share);
+#endif
 
 #ifdef unix
-	  __sync_fetch_and_add((volatile int *)latch, -Share);
+	__sync_fetch_and_and ((ushort *)latch, ~Mutex);
 #else
-	  _InterlockedExchangeAdd ((volatile int *)latch, -Share);
+	_InterlockedAnd16((ushort *)latch, ~Mutex);
 #endif
-	}
 
-	//	and yield
+	if( prev )
+		return;
 #ifdef  unix
-	sched_yield();
+  } while( sched_yield(), 1 );
 #else
-	SwitchToThread();
+  } while( SwitchToThread(), 1 );
 #endif
-  } while( 1 );
 }
 
 //	wait for other read and write latches to relinquish
 
 void bt_writelock(BtLatch *latch)
 {
-int prev;
+ushort prev;
 
   do {
-	//	set exclusive access pending
-
-#ifdef unix
-	__sync_fetch_and_or((int *)latch, Pending);
-#else
-	_InterlockedOr((int *)latch, Pending);
-#endif
-
-	//  see if we can get write access
-	//	with no readers
-#ifdef unix
-	prev = __sync_fetch_and_or((volatile int *)latch, Write);
-#else
-	prev = _InterlockedOr((volatile int *)latch, Write);
-#endif
-
-	//	did we get exclusive access?
-	//	  if so, clear write pending
-
-	if( !(prev & ~Pending) ) {
-#ifdef unix
-		__sync_fetch_and_and((volatile int *)latch, ~Pending);
-#else
-		_InterlockedAnd((volatile int *)latch, ~Pending);
-#endif
-		return;
-	}
-
-	//  reset our Write mode if it was clear before
-
-	if( !(prev & Write) ) {
-#ifdef unix
-		__sync_fetch_and_and((volatile int *)latch, ~Write);
-#else
-		_InterlockedAnd((volatile int *)latch, ~Write);
-#endif
-	}
-
-	//	otherwise yield
-
 #ifdef  unix
-	sched_yield();
+	if( __sync_fetch_and_or((ushort *)latch, Mutex | Pending) & Mutex )
+		continue;
 #else
-	SwitchToThread();
+	if( _InterlockedOr16((ushort *)latch, Mutex | Pending) & Mutex )
+		continue;
 #endif
-  } while( 1 );
+	if( prev = !(latch->share | latch->exclusive) )
+#ifdef unix
+		__sync_fetch_and_or((ushort *)latch, Write);
+#else
+		_InterlockedOr16((ushort *)latch, Write);
+#endif
+
+#ifdef unix
+	__sync_fetch_and_and ((ushort *)latch, ~(Mutex | Pending));
+#else
+	_InterlockedAnd16((ushort *)latch, ~(Mutex | Pending));
+#endif
+
+	if( prev )
+		return;
+#ifdef  unix
+  } while( sched_yield(), 1 );
+#else
+  } while( SwitchToThread(), 1 );
+#endif
 }
 
 //	try to obtain write lock
@@ -715,32 +705,30 @@ int prev;
 
 int bt_writetry(BtLatch *latch)
 {
-int prev;
+ushort prev;
 
-	//  see if we can get write access
-	//	with no readers
 #ifdef unix
-	prev = __sync_fetch_and_or((volatile int *)latch, Write);
+	if( prev = __sync_fetch_and_or((ushort *)latch, Mutex), prev & Mutex )
+		return 0;
 #else
-	prev = _InterlockedOr((volatile int *)latch, Write);
+	if( prev = _InterlockedOr16((ushort *)latch, Mutex), prev & Mutex )
+		return 0;
+#endif
+	//	take write access if all bits are clear
+
+	if( !prev )
+#ifdef unix
+		__sync_fetch_and_or ((ushort *)latch, Write);
+#else
+		_InterlockedOr16((ushort *)latch, Write);
 #endif
 
-	//	did we get exclusive access?
-	//	  if so, return OK
-
-	if( !(prev & ~Pending) )
-		return 1;
-
-	//  reset our Write mode if it was clear before
-
-	if( !(prev & Write) ) {
 #ifdef unix
-		__sync_fetch_and_and((volatile int *)latch, ~Write);
+	__sync_fetch_and_and ((ushort *)latch, ~Mutex);
 #else
-		_InterlockedAnd((volatile int *)latch, ~Write);
+	_InterlockedAnd16((ushort *)latch, ~Mutex);
 #endif
-	}
-	return 0;
+	return !prev;
 }
 
 //	clear write mode
@@ -748,9 +736,9 @@ int prev;
 void bt_releasewrite(BtLatch *latch)
 {
 #ifdef unix
-	__sync_fetch_and_and((int *)latch, ~Write);
+	__sync_fetch_and_and ((ushort *)latch, ~Write);
 #else
-	_InterlockedAnd ((int *)latch, ~Write);
+	_InterlockedAnd16((ushort *)latch, ~Write);
 #endif
 }
 
@@ -759,9 +747,9 @@ void bt_releasewrite(BtLatch *latch)
 void bt_releaseread(BtLatch *latch)
 {
 #ifdef unix
-	__sync_fetch_and_add((int *)latch, -Share);
+	__sync_fetch_and_add((ushort *)latch, -Share);
 #else
-	_InterlockedExchangeAdd((int *)latch, -Share);
+	_InterlockedExchangeAdd16 ((ushort *)latch, -Share);
 #endif
 }
 
@@ -1166,7 +1154,6 @@ BTERR bt_freepage(BtDb *bt, uid page_no)
 
 uid bt_newpage(BtDb *bt, BtPage page)
 {
-BtPool *pool;
 uid new_page;
 BtPage pmap;
 int subpage;
@@ -1174,7 +1161,7 @@ int reuse;
 
 	// lock page zero
 
-	if ( bt_lockpage(bt, ALLOC_page, BtLockWrite, &bt->alloc) )
+	if( bt_lockpage(bt, ALLOC_page, BtLockWrite, &bt->alloc) )
 		return 0;
 
 	// use empty chain first
@@ -1194,36 +1181,29 @@ int reuse;
 	}
 
 #ifdef unix
-	memset(bt->zero, 0, sizeof(BtLatchSet)); // clear locks
-	memcpy((char *)bt->zero + sizeof(BtLatchSet), (char *)page + sizeof(BtLatchSet), bt->mgr->page_size - sizeof(BtLatchSet));
+	// if writing first page of pool block
+	//	expand file thru last page in the block
 
-	if ( pwrite(bt->mgr->idx, bt->zero, bt->mgr->page_size, new_page << bt->mgr->page_bits) < bt->mgr->page_size )
+	if( !reuse && (new_page & bt->mgr->poolmask) == 0 )
+	  if( pwrite(bt->mgr->idx, bt->zero, bt->mgr->page_size, (new_page | bt->mgr->poolmask) << bt->mgr->page_bits) < bt->mgr->page_size )
 		return bt->err = BTERR_wrt, 0;
+#endif
+	// unlock page allocation page 
 
-	// if writing first page of pool block, zero last page in the block
+	if( bt_unlockpage(bt, ALLOC_page, BtLockWrite) )
+		return 0;
 
-	if ( !reuse && bt->mgr->poolmask > 0 && (new_page & bt->mgr->poolmask) == 0 )
-	{
-		// use zero buffer to write zeros
-		memset(bt->zero, 0, bt->mgr->page_size);
-		if ( pwrite(bt->mgr->idx,bt->zero, bt->mgr->page_size, (new_page | bt->mgr->poolmask) << bt->mgr->page_bits) < bt->mgr->page_size )
-			return bt->err = BTERR_wrt, 0;
-	}
-#else
 	//	bring new page into pool and copy page.
-	//	this will extend the file into the new pages.
+	//	on Windows, this will extend the file into the new page.
 
 	if( bt_lockpage(bt, new_page, BtLockWrite, &pmap) )
 		return 0;
 
-	memcpy(pmap, page, bt->mgr->page_size);
+	//	copy source page but leave latch area intact
+
+	memcpy((char *)pmap + sizeof(BtLatchSet), (char *)page + sizeof(BtLatchSet), bt->mgr->page_size - sizeof(BtLatchSet));
 
 	if( bt_unlockpage (bt, new_page, BtLockWrite) )
-		return 0;
-#endif
-	// unlock page allocation page 
-
-	if ( bt_unlockpage(bt, ALLOC_page, BtLockWrite) )
 		return 0;
 
 	return new_page;

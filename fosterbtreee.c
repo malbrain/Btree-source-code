@@ -234,7 +234,7 @@ typedef struct {
 	BtLatchMgr *latchmgr;		// mapped latch page from allocation page
 	BtLatchSet *latchset;		// first mapped latch set from latch pages
 #ifndef unix
-	HANDLE halloc, hlatch;		// allocation and latch table handles
+	HANDLE halloc;				// allocation and latch table handle
 #endif
 } BtMgr;
 
@@ -363,20 +363,27 @@ ushort prev;
 
   do {
 #ifdef unix
-	do prev = __sync_fetch_and_or((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	while( __sync_fetch_and_or((ushort *)latch, Mutex) & Mutex )
+		sched_yield();
 #else
-	do prev = _InterlockedOr16((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	while( _InterlockedOr16((ushort *)latch, Mutex) & Mutex )
+		SwitchToThread();
 #endif
 
-	//  see if exclusive request is pending, or granted
+	//  see if exclusive request is granted or pending
 
 	if( prev = !(latch->exclusive | latch->pending) )
-		latch->share++;
+#ifdef unix
+		__sync_fetch_and_add((ushort *)latch, Share);
+#else
+		_InterlockedExchangeAdd16 ((ushort *)latch, Share);
+#endif
 
-	latch->mutex = 0;
-
+#ifdef unix
+	__sync_fetch_and_and ((ushort *)latch, ~Mutex);
+#else
+	_InterlockedAnd16((ushort *)latch, ~Mutex);
+#endif
 	if( prev )
 		return;
 #ifdef  unix
@@ -394,17 +401,24 @@ ushort prev;
 
   do {
 #ifdef  unix
-	do prev = __sync_fetch_and_or((ushort *)latch, (Pending | Mutex));
-	while( prev & Mutex );
+	while( __sync_fetch_and_or((ushort *)latch, Mutex | Pending) & Mutex )
+		sched_yield();
 #else
-	do prev = _InterlockedOr16((ushort *)latch, (Pending | Mutex));
-	while( prev & Mutex );
+	while( _InterlockedOr16((ushort *)latch, Mutex | Pending) & Mutex )
+		SwitchToThread();
 #endif
 	if( prev = !(latch->share | latch->exclusive) )
-		latch->exclusive = 1, latch->pending = 0;
+#ifdef unix
+		__sync_fetch_and_or((ushort *)latch, Write);
+#else
+		_InterlockedOr16((ushort *)latch, Write);
+#endif
 
-	latch->mutex = 0;
-
+#ifdef unix
+	__sync_fetch_and_and ((ushort *)latch, ~(Mutex | Pending));
+#else
+	_InterlockedAnd16((ushort *)latch, ~(Mutex | Pending));
+#endif
 	if( prev )
 		return;
 #ifdef  unix
@@ -425,18 +439,26 @@ int bt_spinwritetry(BtSpinLatch *latch)
 ushort prev;
 
 #ifdef unix
-	do prev = __sync_fetch_and_or((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	if( prev = __sync_fetch_and_or((ushort *)latch, Mutex), prev & Mutex )
+		return 0;
 #else
-	do prev = _InterlockedOr16((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	if( prev = _InterlockedOr16((ushort *)latch, Mutex), prev & Mutex )
+		return 0;
 #endif
 	//	take write access if all bits are clear
 
 	if( !prev )
-		latch->exclusive = 1;
+#ifdef unix
+		__sync_fetch_and_or ((ushort *)latch, Write);
+#else
+		_InterlockedOr16((ushort *)latch, Write);
+#endif
 
-	latch->mutex = 0;
+#ifdef unix
+	__sync_fetch_and_and ((ushort *)latch, ~Mutex);
+#else
+	_InterlockedAnd16((ushort *)latch, ~Mutex);
+#endif
 	return !prev;
 }
 
@@ -444,36 +466,22 @@ ushort prev;
 
 void bt_spinreleasewrite(BtSpinLatch *latch)
 {
-ushort prev;
-
 #ifdef unix
-	do prev = __sync_fetch_and_or((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	__sync_fetch_and_and ((ushort *)latch, ~Write);
 #else
-	do prev = _InterlockedOr16((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	_InterlockedAnd16((ushort *)latch, ~Write);
 #endif
-
-	latch->exclusive = 0;
-	latch->mutex = 0;
 }
 
 //	decrement reader count
 
 void bt_spinreleaseread(BtSpinLatch *latch)
 {
-ushort prev;
-
 #ifdef unix
-	do prev = __sync_fetch_and_or((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	__sync_fetch_and_add((ushort *)latch, -Share);
 #else
-	do prev = _InterlockedOr16((ushort *)latch, Mutex);
-	while( prev & Mutex );
+	_InterlockedExchangeAdd16 ((ushort *)latch, -Share);
 #endif
-
-	latch->share--;
-	latch->mutex = 0;
 }
 
 void bt_initlockset (BtLatchSet *set)
@@ -944,23 +952,16 @@ mgrlatch:
 		return bt_mgrclose (mgr), NULL;
 #else
 	flag = ( mgr->mode == BT_ro ? PAGE_READONLY : PAGE_READWRITE );
-	mgr->halloc = CreateFileMapping(mgr->idx, NULL, flag, 0, mgr->page_size, NULL);
+	mgr->halloc = CreateFileMapping(mgr->idx, NULL, flag, 0, (BT_latchtable / (mgr->page_size / sizeof(BtLatchSet)) + 1 + LATCH_page) * mgr->page_size, NULL);
 	if( !mgr->halloc )
 		return bt_mgrclose (mgr), NULL;
 
 	flag = ( mgr->mode == BT_ro ? FILE_MAP_READ : FILE_MAP_WRITE );
-	mgr->latchmgr = MapViewOfFile(mgr->halloc, flag, 0, ALLOC_page * mgr->page_size, mgr->page_size);
+	mgr->latchmgr = MapViewOfFile(mgr->halloc, flag, 0, 0, (BT_latchtable / (mgr->page_size / sizeof(BtLatchSet)) + 1 + LATCH_page) * mgr->page_size);
 	if( !mgr->latchmgr )
-		return bt_mgrclose (mgr), NULL;
-	flag = ( mgr->mode == BT_ro ? PAGE_READONLY : PAGE_READWRITE );
-	mgr->hlatch = CreateFileMapping(mgr->idx, NULL, flag, 0, (mgr->latchmgr->nlatchpage + LATCH_page) * mgr->page_size, NULL);
-	if( !mgr->hlatch )
-		return bt_mgrclose (mgr), NULL;
+		return GetLastError(), bt_mgrclose (mgr), NULL;
 
-	flag = ( mgr->mode == BT_ro ? FILE_MAP_READ : FILE_MAP_WRITE );
-	mgr->latchset = MapViewOfFile(mgr->halloc, flag, 0, LATCH_page * mgr->page_size, mgr->page_size * mgr->latchmgr->nlatchpage);
-	if( !mgr->latchmgr )
-		return bt_mgrclose (mgr), NULL;
+	mgr->latchset = (void *)((char *)mgr->latchmgr + LATCH_page * mgr->page_size);
 #endif
 
 #ifdef unix
