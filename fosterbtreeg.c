@@ -1356,7 +1356,7 @@ int reuse;
 
 	//	lock allocation page
 
-	bt_spinwritelock(bt->mgr->latchmgr->lock, 1);
+	bt_spinwritelock(bt->mgr->latchmgr->lock, 0);
 
 	// use empty chain first
 	// else allocate empty page
