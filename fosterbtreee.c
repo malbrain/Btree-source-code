@@ -1,5 +1,5 @@
-// foster btree version e2
-// 18 JAN 2014
+// foster btree version e
+// 29 JAN 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -129,7 +129,6 @@ typedef struct Page {
 	unsigned char lvl:7;		// level of page
  	unsigned char dirty:1;		// page needs to be cleaned
 	unsigned char right[BtId];	// page number to right
-	BtSlot table[0];			// the key slots
 } *BtPage;
 
 //	mode & definition for hash latch implementation
@@ -339,7 +338,7 @@ extern uint bt_tod (BtDb *bt, uint slot);
 
 //	Access macros to address slot and key values from the page
 
-#define slotptr(page, slot) (page->table + slot-1)
+#define slotptr(page, slot) (((BtSlot *)(page+1)) + (slot-1))
 #define keyptr(page, slot) ((BtKey)((unsigned char*)(page) + slotptr(page, slot)->off))
 
 void bt_putid(unsigned char *dest, uid id)
@@ -1496,7 +1495,7 @@ uint diff, higher = bt->page->cnt, low = 1, slot;
 //  find and load page at given level for given key
 //	leave page rd or wr locked as requested
 
-int bt_loadpage (BtDb *bt, unsigned char *key, uint len, uint lvl, BtLock lock)
+uint bt_loadpage (BtDb *bt, unsigned char *key, uint len, uint lvl, BtLock lock)
 {
 uid page_no = ROOT_page, prevpage = 0;
 BtLatchSet *set, *prevset;
@@ -1568,6 +1567,7 @@ int foster = 0;
 
 	if( keycmp (keyptr(bt->page,bt->page->cnt), key, len) < 0 ) {
 		page_no = bt_getid(bt->page->right);
+		foster = 1;
 		continue;
 	}
 
