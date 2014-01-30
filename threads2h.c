@@ -1,5 +1,5 @@
 // btree version threads2h pthread rw lock version
-// 29 JAN 2014
+// 30 JAN 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -1479,15 +1479,20 @@ int bt_findslot (BtDb *bt, unsigned char *key, uint len)
 uint diff, higher = bt->page->cnt, low = 1, slot;
 uint good = 0;
 
-	//	make stopper key an infinite fence value
+	//	if no right link
+	//	  make stopper key an infinite fence value
+	//	  by setting the good flag
 
 	if( bt_getid (bt->page->right) )
 		higher++;
 	else
 		good++;
 
-	//	low is the next candidate, higher is already
-	//	tested as .ge. the given key, loop ends when they meet
+	//	low is the next candidate.
+	//  loop ends when they meet
+
+	//  if good, higher is already
+	//	tested as .ge. the given key.
 
 	while( diff = higher - low ) {
 		slot = low + ( diff >> 1 );
@@ -1605,6 +1610,7 @@ slideright:
 	prevpool = bt->pool;
 	prevset = bt->set;
 	prevmode = mode;
+
   } while( page_no );
 
   // return error on end of right chain
@@ -2414,6 +2420,46 @@ uint bt_tod(BtDb *bt, uint slot)
 
 #ifdef STANDALONE
 
+void bt_latchaudit (BtDb *bt)
+{
+ushort idx, hashidx;
+BtLatchSet *set;
+BtPool *pool;
+BtPage page;
+uid page_no;
+
+#ifdef unix
+	for( idx = 1; idx < bt->mgr->latchmgr->latchdeployed; idx++ ) {
+		set = bt->mgr->latchsets + idx;
+		if( set->pin ) {
+			fprintf(stderr, "latchset %d pinned\n", idx);
+			set->pin = 0;
+		}
+	}
+
+	for( hashidx = 0; hashidx < bt->mgr->latchmgr->latchhash; hashidx++ ) {
+	  if( *(uint *)bt->mgr->latchmgr->table[hashidx].latch )
+		fprintf(stderr, "latchmgr locked\n");
+	  if( idx = bt->mgr->latchmgr->table[hashidx].slot ) do {
+		set = bt->mgr->latchsets + idx;
+		if( set->hash != hashidx )
+			fprintf(stderr, "latchset %d wrong hashidx\n", idx);
+		if( set->pin )
+			fprintf(stderr, "latchset %d pinned\n", idx);
+	  } while( idx = set->next );
+	}
+	page_no = bt_getid(bt->mgr->latchmgr->alloc[1].right);
+
+	while( page_no ) {
+		fprintf(stderr, "free: %.6x\n", (uint)page_no);
+		pool = bt_pinpool (bt, page_no);
+		page = bt_page (bt, pool, page_no);
+	    page_no = bt_getid(page->right);
+		bt_unpinpool (pool);
+	}
+#endif
+}
+
 typedef struct {
 	char type, idx;
 	char *infile;
@@ -2448,6 +2494,12 @@ FILE *in;
 
 	switch(args->type | 0x20)
 	{
+	case 'a':
+		fprintf(stderr, "started latch mgr audit\n");
+		bt_latchaudit (bt);
+		fprintf(stderr, "finished latch mgr audit\n");
+		break;
+
 	case 'w':
 		fprintf(stderr, "started indexing for %s\n", args->infile);
 		if( in = fopen (args->infile, "rb") )

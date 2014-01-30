@@ -1,5 +1,5 @@
 // btree version threads2i sched_yield version
-// 29 JAN 2014
+// 30 JAN 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -207,7 +207,6 @@ typedef struct {
 	uint seg_bits;				// seg size in pages in bits
 	uint mode;					// read-write mode
 #ifdef unix
-	char *pooladvise;			// bit maps for pool page advisements
 	int idx;
 #else
 	HANDLE idx;
@@ -695,7 +694,6 @@ uint slot;
 	free (mgr->pool);
 	free (mgr->hash);
 	free (mgr->latch);
-	free (mgr->pooladvise);
 	free (mgr);
 #else
 	FlushFileBuffers(mgr->idx);
@@ -828,7 +826,6 @@ SYSTEM_INFO sysinfo[1];
 	mgr->pool = calloc (poolmax, sizeof(BtPool));
 	mgr->hash = calloc (hashsize, sizeof(ushort));
 	mgr->latch = calloc (hashsize, sizeof(BtSpinLatch));
-	mgr->pooladvise = calloc (poolmax, (mgr->poolmask + 8) / 8);
 #else
 	mgr->pool = GlobalAlloc (GMEM_FIXED|GMEM_ZEROINIT, poolmax * sizeof(BtPool));
 	mgr->hash = GlobalAlloc (GMEM_FIXED|GMEM_ZEROINIT, hashsize * sizeof(ushort));
@@ -1078,8 +1075,6 @@ int flag;
 	if( pool->map == MAP_FAILED )
 		return bt->err = BTERR_map;
 
-	// clear out madvise issued bits
-	memset (bt->mgr->pooladvise + pool->slot * ((bt->mgr->poolmask + 8) / 8), 0, (bt->mgr->poolmask + 8)/8);
 #else
 	flag = ( bt->mgr->mode == BT_ro ? PAGE_READONLY : PAGE_READWRITE );
 	pool->hmap = CreateFileMapping(bt->mgr->idx, NULL, flag, (DWORD)(limit >> 32), (DWORD)limit, NULL);
@@ -1102,17 +1097,6 @@ uint subpage = (uint)(page_no & bt->mgr->poolmask); // page within mapping
 BtPage page;
 
 	page = (BtPage)(pool->map + (subpage << bt->mgr->page_bits));
-#ifdef unix
-	{
-	uint idx = subpage / 8;
-	uint bit = subpage % 8;
-
-		if( ~((bt->mgr->pooladvise + pool->slot * ((bt->mgr->poolmask + 8)/8))[idx] >> bit) & 1 ) {
-		  madvise (page, bt->mgr->page_size, MADV_WILLNEED);
-		  (bt->mgr->pooladvise + pool->slot * ((bt->mgr->poolmask + 8)/8))[idx] |= 1 << bit;
-		}
-	}
-#endif
 	return page;
 }
 
@@ -1384,15 +1368,20 @@ int bt_findslot (BtDb *bt, unsigned char *key, uint len)
 uint diff, higher = bt->page->cnt, low = 1, slot;
 uint good = 0;
 
-	//	make stopper key an infinite fence value
+	//	if no right link
+	//	  make stopper key an infinite fence value
+	//	  by setting the good flag
 
 	if( bt_getid (bt->page->right) )
 		higher++;
 	else
 		good++;
 
-	//	low is the next candidate, higher is already
-	//	tested as .ge. the given key, loop ends when they meet
+	//	low is the next candidate.
+	//  loop ends when they meet
+
+	//  if good, higher is already
+	//	tested as .ge. the given key.
 
 	while( diff = higher - low ) {
 		slot = low + ( diff >> 1 );
