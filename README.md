@@ -5,7 +5,7 @@ A working project for High-concurrency B-tree source code in C
 
 There are four major code sets in the standard btree source code:
 
-btree2q.c       Single Threaded/MultiProcess with latching supplied by advisory file locking.  Works with network file systems.
+btree2s.c       Single Threaded/MultiProcess with latching supplied by advisory file locking.  Works with network file systems.
 
 threads2h.c     Multi-Threaded/Multi-Process with latching implemented by a latch manager with pthreads/SRW latches in the first few btree pages.
 
