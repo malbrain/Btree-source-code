@@ -146,7 +146,7 @@ typedef struct {
 #ifndef unix
 	HANDLE hmap;
 #endif
-}BtHash;
+} BtHash;
 
 //	The object structure for Btree access
 
@@ -176,12 +176,12 @@ typedef struct _BtDb {
 	int nodemax;		// highest page cache segment allocated
 	int hashmask;		// number of pages in segments - 1
 	int hashsize;		// size of hash table
+	int posted;			// last loadpage found posted key
+	int found;			// last insert/delete found key
 	BtHash *lrufirst;	// lru list head
 	BtHash *lrulast;	// lru list tail
 	ushort *cache;		// hash table for cached segments
 	BtHash nodes[1];	// segment cache follows
-	int posted;			// last loadpage found posted key
-	int found;			// last insert/delete found key
 } BtDb;
 
 typedef enum {
@@ -440,7 +440,6 @@ BtLock lockmode = BtLockWrite;
 BtPage alloc;
 off64_t size;
 uint amt[1];
-BtKey key;
 BtDb* bt;
 
 #ifndef unix
@@ -609,16 +608,12 @@ SYSTEM_INFO sysinfo[1];
 	bt->frame->posted = 1;
 
 	for( lvl=MIN_lvl; lvl--; ) {
-		slotptr(bt->frame, 1)->off = bt->page_size - 3;
+		slotptr(bt->frame, 1)->off = offsetof(struct BtPage_, fence);
 		bt_putid(slotptr(bt->frame, 1)->id, lvl ? MIN_lvl - lvl + 1 : 0);		// next(lower) page number
-		key = keyptr(bt->frame, 1);
-		key->len = 2;			// create stopper key
-		key->key[0] = 0xff;
-		key->key[1] = 0xff;
 		bt->frame->fence[0] = 2;
 		bt->frame->fence[1] = 0xff;
 		bt->frame->fence[2] = 0xff;
-		bt->frame->min = bt->page_size - 3;
+		bt->frame->min = bt->page_size;
 		bt->frame->lvl = lvl;
 		bt->frame->cnt = 1;
 		bt->frame->act = 1;
@@ -1140,29 +1135,34 @@ int chk;
  	// obtain access lock using lock chaining
 
 	if( prevpage ) {
-	  if( bt_lockpage(bt, page_no, BtLockAccess) )
-		return 0;									
-
 	  if( bt_unlockpage(bt, prevpage, BtLockWrite) )
-		return 0;
+		return bt->err;
+	  if( bt_unlockpage(bt, prevpage, BtLockParent) )
+		return bt->err;
 
 	  // obtain parent/fence key maintenance lock
 
 	  if( bt_lockpage(bt, page_no, BtLockParent) )
-		return 0;									
+		return bt->err;									
+
+	  if( bt_lockpage(bt, page_no, BtLockAccess) )
+		return bt->err;									
+
+	  if( bt_unlockpage(bt, prevpage, BtLockWrite) )
+		return bt->err;
 
  	  // obtain write lock using lock chaining
 
 	  if( bt_lockpage(bt, page_no, BtLockWrite) )
-		return 0;									
+		return bt->err;									
 
 	  if( bt_unlockpage(bt, page_no, BtLockAccess) )
-		return 0;									
+		return bt->err;									
 
 	  //  map/obtain page contents
 
 	  if( bt_mappage (bt, &bt->temp, page_no) )
-		return 0;
+		return bt->err;
 	}
 
 	chk = keycmp ((BtKey)bt->temp->fence, oldfence + 1, *oldfence);
@@ -1195,8 +1195,7 @@ int chk;
 
   // return error on end of right chain
 
-  bt->err = BTERR_struct;
-  return 0;	// return error
+  return bt->err = BTERR_struct;
 }
 
 //	return page to free list
@@ -1370,7 +1369,7 @@ uid right, ppage_no;
 	//	parent fence value
 
 	memcpy (rightfence, bt->temp->fence, 256);
-	memcpy (pagefence, bt->parent->fence, 256);
+	memcpy (pagefence, parent->page->fence, 256);
 	ppage_no = parent->page_no;
 
 	//  pull right sibling over ourselves and unlock
@@ -1571,18 +1570,18 @@ retry:
 	  } else
 		  break;
 
-	//  update & unlock parent page
+	//  update parent page
 
 	if( bt_update (bt, parent->page, parent->page_no) )
-		return bt->err;
-
-	if( bt_unlockpage (bt, parent->page_no, BtLockWrite) )
 		return bt->err;
 
 	//	go down the left node's fence keys to the leaf level
 	//	and update the fence keys in each page
 
 	if( bt_fixfences (bt, left, pagefence) )
+		return bt->err;
+
+	if( bt_unlockpage (bt, parent->page_no, BtLockWrite) )
 		return bt->err;
 
 	//  free our original page
@@ -1881,10 +1880,45 @@ BtKey key;
 	if( page_no == ROOT_page )
 		return bt_splitroot (bt, set, right);
 
-	// insert new fences in parent page
+	if( bt_update (bt, set->page, page_no) )
+		return bt->err; 
+
+	if( bt_unlockpage (bt, page_no, BtLockWrite) )
+		return bt->err;
+
+	// insert new fences in their parent pages
 
 	while( 1 ) {
+		if( bt_lockpage (bt, page_no, BtLockParent) )
+			return bt->err;
+
+		if( bt_lockpage (bt, page_no, BtLockRead) )
+			return bt->err;
+
+		if( bt_mappage (bt, &set->page, page_no) )
+			return bt->err;
+
 		memcpy (fencekey, set->page->fence, 256);
+
+		if( set->page->posted ) {
+		  if( bt_unlockpage (bt, page_no, BtLockParent) )
+			return bt->err;
+			
+		  return bt_unlockpage (bt, page_no, BtLockRead);
+		}
+
+		if( bt_unlockpage (bt, page_no, BtLockRead) )
+			return bt->err;
+
+		if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, page_no, time(NULL)) )
+			return bt->err;
+
+		if( bt_lockpage (bt, page_no, BtLockWrite) )
+			return bt->err;
+
+		if( bt_mappage (bt, &set->page, page_no) )
+			return bt->err;
+
 		right = bt_getid (set->page->right);
 		set->page->posted = 1;
 
@@ -1894,38 +1928,14 @@ BtKey key;
 		if( bt_unlockpage (bt, page_no, BtLockWrite) )
 			return bt->err;
 
-		if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, page_no, time(NULL)) )
-			return bt->err;
-
 		if( bt_unlockpage (bt, page_no, BtLockParent) )
 			return bt->err;
 
 		if( !(page_no = right) )
 			break;
 
-		// obtain fence modification/installation lock
-
-		if( bt_lockpage (bt, page_no, BtLockParent) )
-			return bt->err;
-
-		if( bt_lockpage (bt, page_no, BtLockAccess) )
-			return bt->err;
-
-		if( bt_lockpage (bt, page_no, BtLockWrite) )
-			return bt->err;
-
-		if( bt_unlockpage (bt, page_no, BtLockAccess) )
-			return bt->err;
-
 		if( bt_mappage (bt, &set->page, page_no) )
 			return bt->err;
-
-		if( set->page->posted ) {
-			if( bt_unlockpage (bt, page_no, BtLockWrite) )
-				return bt->err;
-			return bt_unlockpage (bt, page_no, BtLockParent);
-		}
-
 	}
 
 	return 0;

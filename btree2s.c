@@ -166,13 +166,13 @@ typedef struct _BtDb {
 	int nodemax;		// highest page cache segment allocated
 	int hashmask;		// number of pages in segments - 1
 	int hashsize;		// size of hash table
+	int posted;			// last loadpage found posted key
+	int found;			// last deletekey found key
+	int fence;			// last load page used fence position
 	BtHash *lrufirst;	// lru list head
 	BtHash *lrulast;	// lru list tail
 	ushort *cache;		// hash table for cached segments
 	BtHash nodes[1];	// segment cache follows
-	int posted;			// last loadpage found posted key
-	int found;			// last deletekey found key
-	int fence;			// last load page used fence position
 } BtDb;
 
 typedef enum {
