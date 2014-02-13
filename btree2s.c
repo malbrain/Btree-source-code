@@ -119,7 +119,8 @@ typedef struct {
 	uint cnt;					// count of keys in page
 	uint act;					// count of active keys
 	uint min;					// next key offset
-	unsigned char bits;			// page size in bits
+	unsigned char bits:7;		// page size in bits
+	unsigned char free:1;		// page is on free list
 	unsigned char lvl:7;		// level of page
 	unsigned char dirty:1;		// page is dirty
 	unsigned char right[BtId];	// page number to right
@@ -166,7 +167,6 @@ typedef struct _BtDb {
 	int nodemax;		// highest page cache segment allocated
 	int hashmask;		// number of pages in segments - 1
 	int hashsize;		// size of hash table
-	int posted;			// last loadpage found posted key
 	int found;			// last deletekey found key
 	int fence;			// last load page used fence position
 	BtHash *lrufirst;	// lru list head
@@ -917,6 +917,7 @@ BTERR bt_freepage(BtDb *bt, uid page_no)
 	//	store chain in second right
 	bt_putid(bt->temp->right, bt_getid(bt->alloc[1].right));
 	bt_putid(bt->alloc[1].right, page_no);
+	bt->temp->free = 1;
 
 	if( bt_update(bt, bt->alloc, ALLOC_page) )
 		return bt->err;
@@ -1024,16 +1025,6 @@ int bt_findslot (BtDb *bt, unsigned char *key, uint len)
 uint diff, higher = bt->page->cnt, low = 1, slot;
 uint good = 0;
 
-	//	if page is being deleted, send to right
-
-	if( !bt->page->cnt )
-		return 0;
-
-	//	if page is an empty fence holder
-
-	if( !bt->page->act )
-		return bt->page->cnt;
-
 	//	make stopper key an infinite fence value
 
 	if( bt_getid (bt->page->right) )
@@ -1067,8 +1058,6 @@ uint drill = 0xff, slot;
 uint mode, prevmode;
 
   //  start at root of btree and drill down
-
-  bt->posted = 1;
 
   do {
 	// determine lock mode of drill level
@@ -1115,6 +1104,9 @@ uint mode, prevmode;
 			continue;
 	}
 
+	prevpage = bt->page_no;
+	prevmode = mode;
+
 	//  find key on page at this level
 	//  and descend to requested level
 
@@ -1126,27 +1118,23 @@ uint mode, prevmode;
 		if( slot++ < bt->page->cnt )
 			continue;
 		else
-			return bt->err = BTERR_struct, 0;
+			break;
 
-	  page_no = bt_getid(slotptr(bt->page, slot)->id);
-	  bt->fence = slot == bt->page->cnt;
-	  bt->posted = 1;
-	  drill--;
+	  //  if the page has no active slots,
+	  //  move right otherwise drill down
+
+	  if( slot <= bt->page->cnt ) {
+		page_no = bt_getid(slotptr(bt->page, slot)->id);
+		bt->fence = slot == bt->page->cnt;
+		drill--;
+		continue;
+	  }
 	}
 
 	//  or slide right into next page
-	//  (slide left from deleted page)
 
-	else {
-		page_no = bt_getid(bt->page->right);
-		bt->posted = 0;
-	}
+	page_no = bt_getid(bt->page->right);
 
-	//  continue down / right using overlapping locks
-	//  to protect pages being killed or split.
-
-	prevpage = bt->page_no;
-	prevmode = mode;
   } while( page_no );
 
   // return error on end of right chain
