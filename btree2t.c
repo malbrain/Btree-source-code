@@ -45,6 +45,7 @@ REDISTRIBUTION OF THIS SOFTWARE.
 #include <fcntl.h>
 #endif
 
+#include <stddef.h>
 #include <memory.h>
 #include <string.h>
 
