@@ -1580,9 +1580,9 @@ BtPageSet next[1];
 int chk;
 
   memcpy (oldfence, set->page->fence, 256);
+  next->page_no = bt_getid(slotptr(set->page, set->page->cnt)->id);
 
   while( !set->page->kill && set->page->lvl ) {
-	next->page_no = bt_getid(slotptr(set->page, set->page->cnt)->id);
 	next->latch = bt_pinlatch (bt, next->page_no);
 	bt_lockpage (BtLockParent, next->latch);
 	bt_lockpage (BtLockAccess, next->latch);
@@ -1796,9 +1796,23 @@ BtKey ptr;
 
 	//	load and lock our parent
 
-retry:
+  while( 1 ) {
 	if( !(slot = bt_loadpage (bt, parent, pagefence+1, *pagefence, lvl+1, BtLockWrite)) )
 		return bt->err;
+
+	//	do we show up in our parent yet?
+
+	if( set->page_no != bt_getid (slotptr (parent->page, slot)->id) ) {
+		bt_unlockpage (BtLockWrite, parent->latch);
+		bt_unpinlatch (parent->latch);
+		bt_unpinpool (parent->pool);
+#ifdef linux
+		sched_yield();
+#else
+		SwitchToThread();
+#endif
+		continue;
+	}
 
 	//	can we do a simple merge entirely
 	//	between siblings on the parent page?
@@ -1853,7 +1867,7 @@ retry:
 #else
 		SwitchToThread();
 #endif
-		goto retry;
+		continue;
 	}
 
 	//  find our left neighbor in our parent page
@@ -1917,7 +1931,7 @@ retry:
 #else
 		SwitchToThread();
 #endif
-		goto retry;
+		continue;
 	}
 
 	// redirect parent to our left sibling
@@ -1953,7 +1967,7 @@ retry:
 #else
 		SwitchToThread();
 #endif
-		goto retry;
+		continue;
 	}
 
 	//	delete our left sibling from parent
@@ -2011,6 +2025,7 @@ retry:
 	bt_unpinpool (parent->pool);
 
 	return 0;
+  }
 }
 
 //  find and delete key on page by marking delete flag bit
@@ -2072,8 +2087,8 @@ uid bt_findkey (BtDb *bt, unsigned char *key, uint len)
 {
 BtPageSet set[1];
 uint  slot;
+uid id = 0;
 BtKey ptr;
-uid id;
 
 	if( slot = bt_loadpage (bt, set, key, len, 0, BtLockRead) )
 		ptr = keyptr(set->page, slot);
@@ -2083,10 +2098,9 @@ uid id;
 	// if key exists, return row-id
 	//	otherwise return 0
 
-	if( !keycmp (ptr, key, len) )
+	if( slot <= set->page->cnt )
+	  if( !keycmp (ptr, key, len) )
 		id = bt_getid(slotptr(set->page,slot)->id);
-	else
-		id = 0;
 
 	bt_unlockpage (BtLockRead, set->latch);
 	bt_unpinlatch (set->latch);
@@ -2703,21 +2717,18 @@ FILE *in;
 
 	case 'c':
 		fprintf(stderr, "started counting\n");
+		next = bt->mgr->latchmgr->nlatchpage + LATCH_page;
+		page_no = LEAF_page;
 
-	  	do {
-			if( set->pool = bt_pinpool (bt, page_no) )
-				set->page = bt_page (bt, set->pool, page_no);
-			else
-				break;
-			set->latch = bt_pinlatch (bt, page_no);
-			bt_lockpage (BtLockRead, set->latch);
-			cnt += set->page->act;
-			next = bt_getid (set->page->right);
-			bt_unlockpage (BtLockRead, set->latch);
-			bt_unpinlatch (set->latch);
-			bt_unpinpool (set->pool);
-	  	} while( page_no = next );
-
+		while( page_no < bt_getid(bt->mgr->latchmgr->alloc->right) ) {
+			pread (bt->mgr->idx, bt->frame, bt->mgr->page_size, page_no << bt->mgr->page_bits);
+			if( !bt->frame->free && !bt->frame->lvl )
+				cnt += bt->frame->act;
+			if( page_no > LEAF_page )
+				next = page_no + 1;
+			page_no = next;
+		}
+		
 	  	cnt--;	// remove stopper key
 		fprintf(stderr, " Total keys read %d\n", cnt);
 		break;
