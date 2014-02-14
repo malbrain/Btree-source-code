@@ -1,5 +1,5 @@
 // btree version 2s
-// 02 FEB 2014
+// 13 FEB 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -121,8 +121,10 @@ typedef struct {
 	uint min;					// next key offset
 	unsigned char bits:7;		// page size in bits
 	unsigned char free:1;		// page is on free list
-	unsigned char lvl:7;		// level of page
+	unsigned char lvl:5;		// level of page
+	unsigned char kill:1;		// page is being deleted
 	unsigned char dirty:1;		// page is dirty
+	unsigned char posted:1;		// page is posted in parent
 	unsigned char right[BtId];	// page number to right
 } *BtPage;
 
@@ -168,7 +170,6 @@ typedef struct _BtDb {
 	int hashmask;		// number of pages in segments - 1
 	int hashsize;		// size of hash table
 	int found;			// last deletekey found key
-	int fence;			// last load page used fence position
 	BtHash *lrufirst;	// lru list head
 	BtHash *lrulast;	// lru list tail
 	ushort *cache;		// hash table for cached segments
@@ -893,16 +894,6 @@ int amt[1];
 
 BTERR bt_freepage(BtDb *bt, uid page_no)
 {
-	//  obtain delete lock on deleted node
-
-	if( bt_lockpage(bt, page_no, BtLockDelete) )
-		return bt->err;
-
-	//  obtain write lock on deleted node
-
-	if( bt_lockpage(bt, page_no, BtLockWrite) )
-		return bt->err;
-
 	if( bt_mappage (bt, &bt->temp, page_no) )
 		return bt->err;
 
@@ -1110,7 +1101,8 @@ uint mode, prevmode;
 	//  find key on page at this level
 	//  and descend to requested level
 
-	if( slot = bt_findslot (bt, key, len) ) {
+	if( !bt->page->kill )
+	 if( slot = bt_findslot (bt, key, len) ) {
 	  if( drill == lvl )
 		return slot;
 
@@ -1125,11 +1117,10 @@ uint mode, prevmode;
 
 	  if( slot <= bt->page->cnt ) {
 		page_no = bt_getid(slotptr(bt->page, slot)->id);
-		bt->fence = slot == bt->page->cnt;
 		drill--;
 		continue;
 	  }
-	}
+	 }
 
 	//  or slide right into next page
 
@@ -1143,47 +1134,150 @@ uint mode, prevmode;
   return 0;	// return error
 }
 
+//	a fence key was deleted from a page
+//	push new fence value up to the root
+
+BTERR bt_fixfence (BtDb *bt, uid page_no, uint lvl)
+{
+unsigned char leftkey[256], rightkey[256];
+BtKey ptr;
+uid left;
+
+	// remove deleted key, the old fence value
+
+	ptr = keyptr(bt->page, bt->page->cnt--);
+	memcpy(rightkey, ptr, ptr->len + 1);
+
+	left = bt_getid (slotptr(bt->page, bt->page->cnt)->id);
+	ptr = keyptr(bt->page, bt->page->cnt);
+	memcpy(leftkey, ptr, ptr->len + 1);
+
+	if( bt_update (bt, bt->page, page_no) )
+		return bt->err;
+
+	if( bt_unlockpage (bt, page_no, BtLockWrite) )
+		return bt->err;
+
+	if( bt_lockpage (bt, left, BtLockParent) )
+		return bt->err;
+
+	//  insert new (now smaller) fence key
+
+	if( bt_insertkey (bt, leftkey+1, *leftkey, lvl + 1, page_no, time(NULL)) )
+		return bt->err;
+
+	if( bt_unlockpage (bt, left, BtLockParent) )
+		return bt->err;
+
+	//  remove old (larger) fence key
+
+	return bt_deletekey (bt, rightkey+1, *rightkey, lvl + 1);
+}
+
+//	root has a single child
+//	collapse a level from the btree
+//	call with root locked in bt->page
+
+BTERR bt_collapseroot (BtDb *bt, BtPage root)
+{
+uid child;
+uint idx;
+
+	// find the child entry
+	//	and promote to new root
+
+  do {
+	for( idx = 0; idx++ < root->cnt; )
+	  if( !slotptr(root, idx)->dead )
+		break;
+
+	child = bt_getid (slotptr(root, idx)->id);
+
+	if( bt_lockpage (bt, child, BtLockDelete) )
+		return bt->err;
+
+	if( bt_lockpage (bt, child, BtLockWrite) )
+		return bt->err;
+
+	if( bt_mappage (bt, &bt->temp, child) )
+		return bt->err;
+
+	memcpy (root, bt->temp, bt->page_size);
+
+	if( bt_update (bt, root, ROOT_page) )
+		return bt->err;
+
+	if( bt_freepage (bt, child) )
+		return bt->err;
+
+  } while( root->lvl > 1 && root->act == 1 );
+
+  return bt_unlockpage (bt, ROOT_page, BtLockWrite);
+}
+
 //  find and delete key on page by marking delete flag bit
 //  when page becomes empty, delete it
 
 BTERR bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl)
 {
 unsigned char lowerkey[256], higherkey[256];
-uint slot, tod, dirty = 0;
+uint slot, dirty = 0, idx, fence;
 uid page_no, right;
 BtKey ptr;
 
+retry:
 	if( slot = bt_loadpage (bt, key, len, lvl, BtLockWrite) )
 		ptr = keyptr(bt->page, slot);
 	else
 		return bt->err;
 
+	// are we deleting a fence slot?
+
+	fence = slot == bt->page->cnt;
+
 	// if key is found delete it, otherwise ignore request
 
 	if( !keycmp (ptr, key, len) )
-		if( slotptr(bt->page, slot)->dead == 0 ) {
- 			dirty = slotptr(bt->page,slot)->dead = 1;
-			if( slot < bt->page->cnt )
- 				bt->page->dirty = 1;
- 			bt->page->act--;
-		}
+	  if( slotptr(bt->page, slot)->dead == 0 ) {
+ 		dirty = slotptr(bt->page,slot)->dead = 1;
+		if( slot < bt->page->cnt )
+ 			bt->page->dirty = 1;
+ 		bt->page->act--;
 
-	// return if page is not empty, or
-	//	if non-leaf level or fence key
+		// collapse empty slots
+
+		while( idx = bt->page->cnt - 1 )
+		  if( slotptr(bt->page, idx)->dead ) {
+			*slotptr(bt->page, idx) = *slotptr(bt->page, idx + 1);
+			memset (slotptr(bt->page, bt->page->cnt--), 0, sizeof(BtSlot));
+		  } else
+			break;
+	  }
 
 	right = bt_getid(bt->page->right);
 	page_no = bt->page_no;
 
-	if( lvl || bt->page->act || bt->fence )
+	//	did we delete our fence key in an upper level?
+
+	if( dirty && lvl && bt->page->act && fence )
+	  return bt_fixfence (bt, page_no, lvl);
+
+	//	is this a collapsed root?
+
+	if( lvl > 1 && page_no == ROOT_page && bt->page->act == 1 )
+	  return bt_collapseroot (bt, bt->page);
+
+	// return if page is not empty
+
+	if( bt->page->act )
 	  if ( dirty && bt_update(bt, bt->page, page_no) )
 		return bt->err;
 	  else
 		return bt_unlockpage(bt, page_no, BtLockWrite);
 
-	// obtain Parent lock over write lock
+	// mark page being deleted
 
-	if( bt_lockpage(bt, page_no, BtLockParent) )
-		return bt->err;
+	bt->page->kill = 1;
 
 	// cache copy of fence key
 	//	in order to find parent
@@ -1191,12 +1285,45 @@ BtKey ptr;
 	ptr = keyptr(bt->page, bt->page->cnt);
 	memcpy(lowerkey, ptr, ptr->len + 1);
 
+	if( bt_update(bt, bt->page, page_no) )
+		return bt->err;
+
+	if( bt_unlockpage(bt, page_no, BtLockWrite) )
+		return bt->err;
+
+	// obtain Parent lock
+
+	if( bt_lockpage(bt, page_no, BtLockParent) )
+		return bt->err;
+
 	// lock and map right page
 
 	if ( bt_lockpage(bt, right, BtLockWrite) )
 		return bt->err;
 
 	if( bt_mappage (bt, &bt->temp, right) )
+		return bt->err;
+
+	//	is our right sibling being deleted?
+
+	if( bt->temp->kill ) {
+	  if ( bt_unlockpage(bt, right, BtLockWrite) )
+		return bt->err;
+
+	  if( bt_unlockpage(bt, page_no, BtLockParent) )
+		return bt->err;
+#ifdef linux
+	  sched_yield ();
+#else
+	  SwitchToThread();
+#endif
+	  goto retry;
+	}
+
+	if( bt_lockpage(bt, page_no, BtLockWrite) )
+		return bt->err;
+
+	if( bt_mappage (bt, &bt->page, page_no) )
 		return bt->err;
 
 	// pull contents of next page into current empty page 
@@ -1212,7 +1339,7 @@ BtKey ptr;
 	//	until we can post updates at higher level.
 
 	bt_putid(bt->temp->right, page_no);
-	bt->temp->cnt = 0;
+	bt->temp->kill = 1;
 
 	if( bt_update(bt, bt->page, page_no) )
 		return bt->err;
@@ -1226,30 +1353,33 @@ BtKey ptr;
 	if( bt_unlockpage(bt, page_no, BtLockWrite) )
 		return bt->err;
 
+	//  redirect higher key directly to consolidated node
+
+	if( bt_insertkey (bt, higherkey+1, *higherkey, lvl + 1, page_no, time(NULL)) )
+		return bt->err;
+
 	//  delete old lower key to consolidated node
 
 	if( bt_deletekey (bt, lowerkey + 1, *lowerkey, lvl + 1) )
 		return bt->err;
 
-	//  redirect higher key directly to consolidated node
+	//  obtain delete lock on deleted node
+	//	add right block to free chain
 
-	tod = (uint)time(NULL);
-
-	if( bt_insertkey (bt, higherkey+1, *higherkey, lvl + 1, page_no, tod) )
+	if( bt_lockpage(bt, right, BtLockDelete) )
 		return bt->err;
 
-	//	obtain write lock and
-	//	add right block to free chain
+	//  obtain write lock on deleted node
+
+	if( bt_lockpage(bt, right, BtLockWrite) )
+		return bt->err;
 
 	if( bt_freepage (bt, right) )
 		return bt->err;
 
 	// 	remove ParentModify lock
 
-	if( bt_unlockpage(bt, page_no, BtLockParent) )
-		return bt->err;
-	
-	return 0;
+	return bt_unlockpage(bt, page_no, BtLockParent);
 }
 
 //	find key in leaf level and return row-id
@@ -1340,16 +1470,16 @@ int ret;
 
 // split the root and raise the height of the btree
 
-BTERR bt_splitroot(BtDb *bt,  unsigned char *newkey, unsigned char *oldkey, uid page_no2)
+BTERR bt_splitroot(BtDb *bt, unsigned char *leftkey, uid page_no2)
 {
 uint nxt = bt->page_size;
 BtPage root = bt->page;
-uid new_page;
+uid right;
 
 	//  Obtain an empty page to use, and copy the current
 	//  root contents into it
 
-	if( !(new_page = bt_newpage(bt, root)) )
+	if( !(right = bt_newpage(bt, root)) )
 		return bt->err;
 
 	// preserve the page info at the bottom
@@ -1359,16 +1489,18 @@ uid new_page;
 
 	// insert first key on newroot page
 
-	nxt -= *newkey + 1;
-	memcpy ((unsigned char *)root + nxt, newkey, *newkey + 1);
-	bt_putid(slotptr(root, 1)->id, new_page);
+	nxt -= *leftkey + 1;
+	memcpy ((unsigned char *)root + nxt, leftkey, *leftkey + 1);
+	bt_putid(slotptr(root, 1)->id, right);
 	slotptr(root, 1)->off = nxt;
 	
 	// insert second key on newroot page
 	// and increase the root height
 
-	nxt -= *oldkey + 1;
-	memcpy ((unsigned char *)root + nxt, oldkey, *oldkey + 1);
+	nxt -= 3;
+	((unsigned char *)root)[nxt] = 2;
+	((unsigned char *)root)[nxt+1] = 0xff;
+	((unsigned char *)root)[nxt+2] = 0xff;
 	bt_putid(slotptr(root, 2)->id, page_no2);
 	slotptr(root, 2)->off = nxt;
 
@@ -1392,18 +1524,14 @@ uid new_page;
 BTERR bt_splitpage (BtDb *bt)
 {
 uint cnt = 0, idx = 0, max, nxt = bt->page_size;
-unsigned char oldkey[256], lowerkey[256];
 uid page_no = bt->page_no, right;
+unsigned char fencekey[256];
 BtPage page = bt->page;
 uint lvl = page->lvl;
-uid new_page;
 BtKey key;
-uint tod;
 
 	//  split higher half of keys to bt->frame
 	//	the last key (fence key) might be dead
-
-	tod = (uint)time(NULL);
 
 	memset (bt->frame, 0, bt->page_size);
 	max = (int)page->cnt;
@@ -1421,10 +1549,6 @@ uint tod;
 		slotptr(bt->frame, idx)->off = nxt;
 	}
 
-	// remember existing fence key for new page to the right
-
-	memcpy (oldkey, key, key->len + 1);
-
 	bt->frame->bits = bt->page_bits;
 	bt->frame->min = nxt;
 	bt->frame->cnt = idx;
@@ -1432,14 +1556,12 @@ uint tod;
 
 	// link right node
 
-	if( page_no > ROOT_page ) {
-		right = bt_getid (page->right);
-		bt_putid(bt->frame->right, right);
-	}
+	if( page_no > ROOT_page )
+		memcpy (bt->frame->right, page->right, BtId);
 
 	//	get new free page and write frame to it.
 
-	if( !(new_page = bt_newpage(bt, bt->frame)) )
+	if( !(right = bt_newpage(bt, bt->frame)) )
 		return bt->err;
 
 	//	update lower keys to continue in old page
@@ -1447,6 +1569,8 @@ uint tod;
 	memcpy (bt->frame, page, bt->page_size);
 	memset (page+1, 0, bt->page_size - sizeof(*page));
 	nxt = bt->page_size;
+	page->posted = 0;
+	page->dirty = 0;
 	page->act = 0;
 	cnt = 0;
 	idx = 0;
@@ -1466,52 +1590,62 @@ uint tod;
 
 	// remember fence key for old page
 
-	memcpy(lowerkey, key, key->len + 1);
-	bt_putid(page->right, new_page);
+	memcpy (fencekey, key, key->len + 1);
+	bt_putid(page->right, right);
 	page->min = nxt;
 	page->cnt = idx;
 
 	// if current page is the root page, split it
 
 	if( page_no == ROOT_page )
-		return bt_splitroot (bt, lowerkey, oldkey, new_page);
+		return bt_splitroot (bt, fencekey, right);
 
 	// update left (containing) node
 
 	if( bt_update(bt, page, page_no) )
 		return bt->err;
 
-	// obtain Parent/Write locks
-	// for left and right node pages
-
-	if( bt_lockpage (bt, new_page, BtLockParent) )
-		return bt->err;
-
-	if( bt_lockpage (bt, page_no, BtLockParent) )
-		return bt->err;
-
-	//  release wr lock on left page
-
 	if( bt_unlockpage (bt, page_no, BtLockWrite) )
 		return bt->err;
 
-	// insert new fence for reformulated left block
+	//  insert new fences in parent pages
 
-	if( bt_insertkey (bt, lowerkey+1, *lowerkey, lvl + 1, page_no, tod) )
+	do {
+	  if( bt_lockpage (bt, page_no, BtLockParent) )
 		return bt->err;
 
-	// fix old fence for newly allocated right block page
-
-	if( bt_insertkey (bt, oldkey+1, *oldkey, lvl + 1, new_page, tod) )
+	  if( bt_lockpage (bt, page_no, BtLockWrite) )
 		return bt->err;
 
-	// release Parent & Write locks
-
-	if( bt_unlockpage (bt, new_page, BtLockParent) )
+	  if( bt_mappage (bt, &bt->page, page_no) )
 		return bt->err;
 
-	if( bt_unlockpage (bt, page_no, BtLockParent) )
+ 	  key = keyptr(bt->page, bt->page->cnt);
+	  memcpy (fencekey, key, key->len + 1);
+
+	  if( bt->page->posted ) {
+		if( bt_unlockpage (bt, page_no, BtLockParent) )
+		  return bt->err;
+		return bt_unlockpage (bt, page_no, BtLockWrite);
+	  }
+
+	  right = bt_getid (bt->page->right);
+	  bt->page->posted = 1;
+
+	  if( bt_update (bt, bt->page, page_no) )
 		return bt->err;
+
+	  if( bt_unlockpage (bt, page_no, BtLockWrite) )
+		return bt->err;
+
+	  // insert new fence for reformulated left block
+
+	  if( bt_insertkey (bt, fencekey+1, *fencekey, lvl + 1, page_no, time(NULL)) )
+		return bt->err;
+
+	  if( bt_unlockpage (bt, page_no, BtLockParent) )
+		return bt->err;
+	} while( page_no = right );
 
 	return 0;
 }
