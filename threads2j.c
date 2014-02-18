@@ -1,6 +1,6 @@
 // btree version threads2j linux futex concurrency version
 //	with reworked bt_deletekey
-// 12 FEB 2014
+// 17 FEB 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -87,18 +87,11 @@ typedef enum{
 	BtLockDelete,
 	BtLockRead,
 	BtLockWrite,
-	BtLockParent
+	BtLockParent,
+	BtLockParentWrt
 } BtLock;
 
 //	mode & definition for latch implementation
-
-enum {
-	Mutex = 1 << 0,		// the mutex bit
-	Write = 1 << 1, 	// the writers bit
-	Share = 1 << 2,		// reader count
-	PendRd = 1 << 12,	// reader contended count
-	PendWr = 1 << 22	// writer contended count
-} LockMode;
 
 enum {
 	QueRd = 1,	// reader queue
@@ -109,11 +102,14 @@ enum {
 // grant write lock when share == 0
 
 typedef struct {
-	volatile uint mutex:1;		// 1 = busy
-	volatile uint write:1;		// 1 = exclusive
-	volatile uint share:10;		// count of readers holding locks
-	volatile uint readwait:10;	// count of readers waiting
-	volatile uint writewait:10;	// count of writers waiting
+	volatile unsigned char mutex;		// 1 = busy
+	volatile unsigned char write:1;		// 1 = exclusive
+	volatile unsigned char readwait:1;	// readers are waiting
+	volatile unsigned char writewait:1;	// writers are waiting
+	volatile unsigned char filler:5;
+	volatile ushort share;				// count of readers holding locks
+	volatile ushort rcnt;				// count of waiting readers
+	volatile ushort wcnt;				// count of waiting writers
 } BtLatch;
 
 //	Define the length of the page and key pointers
@@ -139,7 +135,7 @@ typedef struct {
 } BtSlot;
 
 //	The key structure occupies space at the upper end of
-//	each page.  It's a length byte followed by the value
+//	each page.  It's a length byte followed by the key
 //	bytes.
 
 typedef struct {
@@ -157,13 +153,11 @@ typedef struct BtPage_ {
 	uint min;					// next key offset
 	unsigned char bits:7;		// page size in bits
 	unsigned char free:1;		// page is on free list
-	unsigned char lvl:4;		// level of page
+	unsigned char lvl:5;		// level of page
 	unsigned char kill:1;		// page is being deleted
 	unsigned char dirty:1;		// page has deleted keys
 	unsigned char posted:1;		// page fence has posted
-	unsigned char goright:1;	// page is being killed, continue to right
 	unsigned char right[BtId];	// page number to right
-	unsigned char fence[256];	// page fence key
 } *BtPage;
 
 //  hash table entries
@@ -275,21 +269,17 @@ typedef enum {
 // B-Tree functions
 extern void bt_close (BtDb *bt);
 extern BtDb *bt_open (BtMgr *mgr);
-extern BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uid id, uint tod, uint lvl);
-extern BTERR  bt_deletekey (BtDb *bt, unsigned char *key, uint len);
+extern BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uint lvl, uid id, uint tod);
+extern BTERR  bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl);
 extern uid bt_findkey    (BtDb *bt, unsigned char *key, uint len);
 extern uint bt_startkey  (BtDb *bt, unsigned char *key, uint len);
 extern uint bt_nextkey   (BtDb *bt, uint slot);
-
-//	internal functions
-BTERR bt_removepage (BtDb *bt, BtPageSet *set, uint lvl, unsigned char *pagefence);
 
 //	manager functions
 extern BtMgr *bt_mgr (char *name, uint mode, uint bits, uint poolsize, uint segsize, uint hashsize);
 void bt_mgrclose (BtMgr *mgr);
 
 //  Helper functions to return slot values
-
 extern BtKey bt_key (BtDb *bt, uint slot);
 extern uid bt_uid (BtDb *bt, uint slot);
 extern uint bt_tod (BtDb *bt, uint slot);
@@ -313,7 +303,8 @@ extern uint bt_tod (BtDb *bt, uint slot);
 //  A key consists of a length byte, two bytes of
 //  index number (0 - 65534), and up to 253 bytes
 //  of key value.  Duplicate keys are discarded.
-//  Associated with each key is a 48 bit row-id.
+//  Associated with each key is a 48 bit row-id,
+//	or any other value desired.
 
 //  The b-tree root is always located at page 1.
 //	The first leaf page of level zero is always
@@ -329,7 +320,7 @@ extern uint bt_tod (BtDb *bt, uint slot);
 
 //	Deleted keys are marked with a dead bit until
 //	page cleanup. The fence key for a node is
-//	present in a special array.
+//	always present.
 
 //  Groups of pages called segments from the btree are optionally
 //  cached with a memory mapped pool. A hash table is used to keep
@@ -386,6 +377,7 @@ int sys_futex(void *addr1, int op, int val1, struct timespec *timeout, void *add
 
 void bt_spinreadlock(BtLatch *latch, int private)
 {
+ushort decr = 0;
 uint prev;
 
   if( private )
@@ -393,27 +385,31 @@ uint prev;
 
   while( 1 ) {
 	//	obtain latch mutex
-	if( __sync_fetch_and_or((uint *)latch, Mutex) & Mutex ) {
+	while( __sync_lock_test_and_set(&latch->mutex, 1) )
 		sched_yield();
-		continue;
-	}
+
+	if( decr )
+		latch->rcnt--, decr = 0;
 
 	//  wait for writers to clear
 	//	increment read waiters and wait
 
 	if( latch->write || latch->writewait ) {
-		__sync_fetch_and_add ((uint *)latch, PendRd);
-		prev = __sync_fetch_and_and ((uint *)latch, ~Mutex) & ~Mutex;
+		latch->readwait = 1;
+		latch->rcnt++;
+		prev = *(uint *)latch & ~1;
+		__sync_lock_release (&latch->mutex);
 		sys_futex( (uint *)latch, FUTEX_WAIT_BITSET | private, prev, NULL, NULL, QueRd );
-		__sync_fetch_and_sub ((uint *)latch, PendRd);
+		decr = 1;
 		continue;
 	}
 	
 	// increment reader lock count
 	// and release latch mutex
 
-	__sync_fetch_and_add ((uint *)latch, Share);
-	__sync_fetch_and_and ((uint *)latch, ~Mutex);
+	latch->readwait = 0;
+	latch->share++;
+	__sync_lock_release (&latch->mutex);
 	return;
   }
 }
@@ -422,6 +418,7 @@ uint prev;
 
 void bt_spinwritelock(BtLatch *latch, int private)
 {
+ushort decr = 0;
 uint prev;
 
   if( private )
@@ -429,26 +426,32 @@ uint prev;
 
   while( 1 ) {
 	//	obtain latch mutex
-	if( __sync_fetch_and_or((uint *)latch, Mutex) & Mutex ) {
+	while( __sync_lock_test_and_set(&latch->mutex, 1) )
 		sched_yield();
-		continue;
-	}
+
+	if( decr )
+		latch->wcnt--, decr = 0;
 
 	//	wait for write and reader count to clear
 
 	if( latch->write || latch->share ) {
-		__sync_fetch_and_add ((uint *)latch, PendWr);
-		prev = __sync_fetch_and_and ((uint *)latch, ~Mutex) & ~Mutex;
+		latch->writewait = 1;
+		latch->wcnt++;
+		prev = *(uint *)latch & ~1;
+		__sync_lock_release (&latch->mutex);
 		sys_futex( (uint *)latch, FUTEX_WAIT_BITSET | private, prev, NULL, NULL, QueWr );
-		__sync_fetch_and_sub ((uint *)latch, PendWr);
+		decr = 1;
 		continue;
 	}
 	
 	//	take write mutex
 	//	release latch mutex
 
-	__sync_fetch_and_or ((uint *)latch, Write);
-	__sync_fetch_and_and ((uint *)latch, ~Mutex);
+	if( !latch->wcnt )
+		latch->writewait = 0;
+
+	latch->write = 1;
+	__sync_lock_release (&latch->mutex);
 	return;
   }
 }
@@ -465,20 +468,19 @@ int ans;
 	//	try for mutex,
 	//	abandon request if not taken
 
-	if( __sync_fetch_and_or((uint *)latch, Mutex) & Mutex )
+	if( __sync_lock_test_and_set(&latch->mutex, 1) )
 		return 0;
 
 	//	see if write mode is available
 
-	if( !latch->write && !latch->share ) {
-		__sync_fetch_and_or ((uint *)latch, Write);
-		ans = 1;
-	} else
+	if( !latch->write && !latch->share )
+		ans = latch->write = 1;
+	else
 		ans = 0;
 
 	// release latch mutex
 
-	__sync_fetch_and_and ((uint *)latch, ~Mutex);
+	__sync_lock_release (&latch->mutex);
 	return ans;
 }
 
@@ -491,24 +493,24 @@ void bt_spinreleasewrite(BtLatch *latch, int private)
 
 	//	obtain latch mutex
 
-	while( __sync_fetch_and_or((uint *)latch, Mutex) & Mutex )
+	while( __sync_lock_test_and_set(&latch->mutex, 1) )
 		sched_yield();
 
-	__sync_fetch_and_and ((uint *)latch, ~Write);
+	latch->write = 0;
 
 	// favor writers
 
-	if( latch->writewait )
+	if( latch->wcnt )
 	  if( sys_futex( (uint *)latch, FUTEX_WAKE_BITSET | private, 1, NULL, NULL, QueWr ) )
 		goto wakexit;
 
-	if( latch->readwait )
+	if( latch->rcnt )
 		sys_futex( (uint *)latch, FUTEX_WAKE_BITSET | private, INT_MAX, NULL, NULL, QueRd );
 
 	// release latch mutex
 
 wakexit:
-	__sync_fetch_and_and ((uint *)latch, ~Mutex);
+	__sync_lock_release (&latch->mutex);
 }
 
 //	decrement reader count
@@ -520,19 +522,19 @@ void bt_spinreleaseread(BtLatch *latch, int private)
 
 	//	obtain latch mutex
 
-	while( __sync_fetch_and_or((uint *)latch, Mutex) & Mutex )
+	while( __sync_lock_test_and_set(&latch->mutex, 1) )
 		sched_yield();
 
-	__sync_fetch_and_sub ((uint *)latch, Share);
+	latch->share--;
 
 	// wake waiting writers
 
-	if( !latch->share && latch->writewait )
+	if( !latch->share && latch->wcnt )
 		sys_futex( (uint *)latch, FUTEX_WAKE_BITSET | private, 1, NULL, NULL, QueWr );
 
 	// release latch mutex
 
-	__sync_fetch_and_and ((uint *)latch, ~Mutex);
+	__sync_lock_release (&latch->mutex);
 }
 
 //	link latch table entry into latch hash table
@@ -917,12 +919,13 @@ SYSTEM_INFO sysinfo[1];
 	latchmgr->alloc->bits = mgr->page_bits;
 
 	for( lvl=MIN_lvl; lvl--; ) {
-		slotptr(latchmgr->alloc, 1)->off = offsetof(struct BtPage_, fence);
+		slotptr(latchmgr->alloc, 1)->off = mgr->page_size - 3;
 		bt_putid(slotptr(latchmgr->alloc, 1)->id, lvl ? MIN_lvl - lvl + 1 : 0);		// next(lower) page number
-		latchmgr->alloc->fence[0] = 2;			// create stopper key
-		latchmgr->alloc->fence[1] = 0xff;
-		latchmgr->alloc->fence[2] = 0xff;
-		latchmgr->alloc->min = mgr->page_size;
+		key = keyptr(latchmgr->alloc, 1);
+		key->len = 2;		// create stopper key
+		key->key[0] = 0xff;
+		key->key[1] = 0xff;
+		latchmgr->alloc->min = mgr->page_size - 3;
 		latchmgr->alloc->lvl = lvl;
 		latchmgr->alloc->cnt = 1;
 		latchmgr->alloc->act = 1;
@@ -1115,7 +1118,7 @@ int flag;
 
 #ifdef unix
 	flag = PROT_READ | ( bt->mgr->mode == BT_ro ? 0 : PROT_WRITE );
-	pool->map = mmap (0, (bt->mgr->poolmask+1) << bt->mgr->page_bits, flag, MAP_SHARED | MAP_POPULATE, bt->mgr->idx, off);
+	pool->map = mmap (0, (bt->mgr->poolmask+1) << bt->mgr->page_bits, flag, MAP_SHARED, bt->mgr->idx, off);
 	if( pool->map == MAP_FAILED )
 		return bt->err = BTERR_map;
 
@@ -1318,6 +1321,10 @@ void bt_lockpage(BtLock mode, BtLatchSet *set)
 	case BtLockParent:
 		bt_spinwritelock (set->parent, 0);
 		break;
+	case BtLockParentWrt:
+		bt_spinwritelock (set->parent, 0);
+		bt_spinwritelock (set->readwr, 0);
+		break;
 	}
 }
 
@@ -1340,6 +1347,10 @@ void bt_unlockpage(BtLock mode, BtLatchSet *set)
 		break;
 	case BtLockParent:
 		bt_spinreleasewrite (set->parent, 0);
+		break;
+	case BtLockParentWrt:
+		bt_spinreleasewrite (set->parent, 0);
+		bt_spinreleasewrite (set->readwr, 0);
 		break;
 	}
 }
@@ -1408,44 +1419,38 @@ int reuse;
 int bt_findslot (BtPageSet *set, unsigned char *key, uint len)
 {
 uint diff, higher = set->page->cnt, low = 1, slot;
+uint good = 0;
 
 	//	  make stopper key an infinite fence value
 
 	if( bt_getid (set->page->right) )
 		higher++;
+	else
+		good++;
 
 	//	low is the lowest candidate.
 	//  loop ends when they meet
 
 	//  higher is already
-	//	tested as .ge. the given key.
+	//	tested as .ge. the passed key.
 
 	while( diff = higher - low ) {
 		slot = low + ( diff >> 1 );
 		if( keycmp (keyptr(set->page, slot), key, len) < 0 )
 			low = slot + 1;
 		else
-			higher = slot;
+			higher = slot, good++;
 	}
 
-	if( higher <= set->page->cnt )
-		return higher;
-
-	//	if leaf page, compare against fence value
-
 	//	return zero if key is on right link page
-	//	or return slot beyond last key
 
-	if( set->page->lvl || keycmp ((BtKey)set->page->fence, key, len) < 0 )
- 		return 0;
-
-	return higher;
+	return good ? higher : 0;
 }
 
 //  find and load page at given level for given key
 //	leave page rd or wr locked as requested
 
-int bt_loadpage (BtDb *bt, BtPageSet *set, unsigned char *key, uint len, uint lvl, uint lock)
+int bt_loadpage (BtDb *bt, BtPageSet *set, unsigned char *key, uint len, uint lvl, BtLock lock)
 {
 uid page_no = ROOT_page, prevpage = 0;
 uint drill = 0xff, slot;
@@ -1457,7 +1462,7 @@ BtPool *prevpool;
 
   do {
 	// determine lock mode of drill level
-	mode = (lock == BtLockWrite) && (drill == lvl) ? BtLockWrite : BtLockRead; 
+	mode = (drill == lvl) ? lock : BtLockRead; 
 
 	set->latch = bt_pinlatch (bt, page_no);
 	set->page_no = page_no;
@@ -1487,6 +1492,9 @@ BtPool *prevpool;
 
 	bt_lockpage(mode, set->latch);
 
+	if( set->page->free )
+		return bt->err = BTERR_struct, 0;
+
 	if( page_no > ROOT_page )
 	  bt_unlockpage(BtLockAccess, set->latch);
 
@@ -1498,7 +1506,7 @@ BtPool *prevpool;
 			
 		drill = set->page->lvl;
 
-		if( lock == BtLockWrite && drill == lvl ) {
+		if( lock != BtLockRead && drill == lvl ) {
 		  bt_unlockpage(mode, set->latch);
 		  bt_unpinlatch (set->latch);
 		  bt_unpinpool (set->pool);
@@ -1511,53 +1519,28 @@ BtPool *prevpool;
 	prevpool = set->pool;
 	prevmode = mode;
 
-	//	if page is being deleted and we should continue right
-
-	if( set->page->kill && set->page->goright ) {
-		page_no = bt_getid (set->page->right);
-		continue;
-	}
-
-	//	otherwise, wait for deleted node to clear
-
-	if( set->page->kill ) {
-		bt_unlockpage(mode, set->latch);
-		bt_unpinlatch (set->latch);
-		bt_unpinpool (set->pool);
-		page_no = ROOT_page;
-		prevpage = 0;
-		drill = 0xff;
-#ifdef unix
-		sched_yield();
-#else
-		SwitchToThread();
-#endif
-		continue;
-	}
-	
 	//  find key on page at this level
 	//  and descend to requested level
 
-	if( slot = bt_findslot (set, key, len) ) {
+	if( !set->page->kill )
+	 if( slot = bt_findslot (set, key, len) ) {
 	  if( drill == lvl )
 		return slot;
-
-	  if( slot > set->page->cnt )
-		return bt->err = BTERR_struct;
 
 	  while( slotptr(set->page, slot)->dead )
 		if( slot++ < set->page->cnt )
 			continue;
 		else
-			return bt->err = BTERR_struct, 0;
+			goto slideright;
 
 	  page_no = bt_getid(slotptr(set->page, slot)->id);
 	  drill--;
 	  continue;
-	}
+	 }
 
 	//  or slide right into next page
 
+slideright:
 	page_no = bt_getid(set->page->right);
 
   } while( page_no );
@@ -1566,61 +1549,6 @@ BtPool *prevpool;
 
   bt->err = BTERR_struct;
   return 0;	// return error
-}
-
-// drill down fixing fence values for left sibling tree
-
-//  call with set write locked
-//	return with set unlocked & unpinned.
-
-BTERR bt_fixfences (BtDb *bt, BtPageSet *set, unsigned char *newfence)
-{
-unsigned char oldfence[256];
-BtPageSet next[1];
-int chk;
-
-  memcpy (oldfence, set->page->fence, 256);
-  next->page_no = bt_getid(slotptr(set->page, set->page->cnt)->id);
-
-  while( !set->page->kill && set->page->lvl ) {
-	next->latch = bt_pinlatch (bt, next->page_no);
-	bt_lockpage (BtLockParent, next->latch);
-	bt_lockpage (BtLockAccess, next->latch);
-	bt_lockpage (BtLockWrite, next->latch);
-	bt_unlockpage (BtLockAccess, next->latch);
-
-	if( next->pool = bt_pinpool (bt, next->page_no) )
-		next->page = bt_page (bt, next->pool, next->page_no);
-	else
-		return bt->err;
-
-	chk = keycmp ((BtKey)next->page->fence, oldfence + 1, *oldfence);
-
-	if( chk < 0 ) {
-	  next->page_no = bt_getid (next->page->right);
-	  bt_unlockpage (BtLockWrite, next->latch);
-	  bt_unlockpage (BtLockParent, next->latch);
-	  bt_unpinlatch (next->latch);
-	  bt_unpinpool (next->pool);
-	  continue;
-	}
-
-	if( chk > 0 )
-		return bt->err = BTERR_struct;
-
-	if( bt_fixfences (bt, next, newfence) )
-		return bt->err;
-
-	break;
-  }
-
-  memcpy (set->page->fence, newfence, 256);
-
-  bt_unlockpage (BtLockWrite, set->latch);
-  bt_unlockpage (BtLockParent, set->latch);
-  bt_unpinlatch (set->latch);
-  bt_unpinpool (set->pool);
-  return 0;
 }
 
 //	return page to free list
@@ -1649,434 +1577,205 @@ void bt_freepage (BtDb *bt, BtPageSet *set)
 	bt_spinreleasewrite (bt->mgr->latchmgr->lock, 0);
 }
 
-//	remove the root level by promoting its only child
-//	call with parent and child pages
+//	a fence key was deleted from a page
+//	push new fence value upwards
 
-BTERR bt_removeroot (BtDb *bt, BtPageSet *root, BtPageSet *child)
+BTERR bt_fixfence (BtDb *bt, BtPageSet *set, uint lvl)
 {
-uid next = 0;
+unsigned char leftkey[256], rightkey[256];
+uid page_no;
+BtKey ptr;
+uint idx;
 
-  do {
-	if( next ) {
-	  child->latch = bt_pinlatch (bt, next);
-	  bt_lockpage (BtLockDelete, child->latch);
-	  bt_lockpage (BtLockWrite, child->latch);
+	//	remove the old fence value
 
-	  if( child->pool = bt_pinpool (bt, next) )
-		child->page = bt_page (bt, child->pool, next);
-	  else
+	ptr = keyptr(set->page, set->page->cnt);
+	memcpy (rightkey, ptr, ptr->len + 1);
+
+	memset (slotptr(set->page, set->page->cnt--), 0, sizeof(BtSlot));
+	set->page->dirty = 1;
+
+	ptr = keyptr(set->page, set->page->cnt);
+	memcpy (leftkey, ptr, ptr->len + 1);
+	page_no = set->page_no;
+
+	bt_unlockpage (BtLockWrite, set->latch);
+
+	//	insert new (now smaller) fence key
+
+	if( bt_insertkey (bt, leftkey+1, *leftkey, lvl+1, page_no, time(NULL)) )
+	  return bt->err;
+
+	//	now delete old fence key
+
+	if( bt_deletekey (bt, rightkey+1, *rightkey, lvl+1) )
 		return bt->err;
 
-	  child->page_no = next;
-	}
+	bt_unlockpage (BtLockParent, set->latch);
+	bt_unpinlatch(set->latch);
+	bt_unpinpool (set->pool);
+	return 0;
+}
+
+//	root has a single child
+//	collapse a level from the tree
+
+BTERR bt_collapseroot (BtDb *bt, BtPageSet *root)
+{
+BtPageSet child[1];
+uint idx;
+
+  // find the child entry and promote as new root contents
+
+  do {
+	for( idx = 0; idx++ < root->page->cnt; )
+	  if( !slotptr(root->page, idx)->dead )
+		break;
+
+	child->page_no = bt_getid (slotptr(root->page, idx)->id);
+
+	child->latch = bt_pinlatch (bt, child->page_no);
+	bt_lockpage (BtLockDelete, child->latch);
+	bt_lockpage (BtLockWrite, child->latch);
+
+	if( child->pool = bt_pinpool (bt, child->page_no) )
+		child->page = bt_page (bt, child->pool, child->page_no);
+	else
+		return bt->err;
 
 	memcpy (root->page, child->page, bt->mgr->page_size);
-	next = bt_getid (slotptr(child->page, child->page->cnt)->id);
 	bt_freepage (bt, child);
-  } while( root->page->lvl > 1 && root->page->cnt == 1 );
 
-  bt_unlockpage (BtLockWrite, root->latch);
+  } while( root->page->lvl > 1 && root->page->act == 1 );
+
+  bt_unlockpage (BtLockParentWrt, root->latch);
   bt_unpinlatch (root->latch);
   bt_unpinpool (root->pool);
   return 0;
 }
 
-//  pull right page over ourselves in simple merge
-
-BTERR bt_mergeright (BtDb *bt, BtPageSet *set, BtPageSet *parent, BtPageSet *right, uint slot, uint idx)
-{
-	//  install ourselves as child page
-	//	and delete ourselves from parent
-
-	bt_putid (slotptr(parent->page, idx)->id, set->page_no);
-	slotptr(parent->page, slot)->dead = 1;
-	parent->page->act--;
-
-	//	collapse any empty slots
-
-	while( idx = parent->page->cnt - 1 )
-	  if( slotptr(parent->page, idx)->dead ) {
-		*slotptr(parent->page, idx) = *slotptr(parent->page, idx + 1);
-		memset (slotptr(parent->page, parent->page->cnt--), 0, sizeof(BtSlot));
-	  } else
-		  break;
-
-	memcpy (set->page, right->page, bt->mgr->page_size);
-	bt_unlockpage (BtLockParent, right->latch);
-
-	bt_freepage (bt, right);
-
-	//	do we need to remove a btree level?
-	//	(leave the first page of leaves alone)
-
-	if( parent->page_no == ROOT_page && parent->page->cnt == 1 )
-	  if( set->page->lvl )
-		return bt_removeroot (bt, parent, set);
-
-	bt_unlockpage (BtLockWrite, parent->latch);
-	bt_unlockpage (BtLockDelete, set->latch);
-	bt_unlockpage (BtLockWrite, set->latch);
-	bt_unpinlatch (parent->latch);
-	bt_unpinpool (parent->pool);
-	bt_unpinlatch (set->latch);
-	bt_unpinpool (set->pool);
-	return 0;
-}
-
-//	remove both child and parent from the btree
-//	from the fence position in the parent
-//	call with both pages locked for writing
-
-BTERR bt_removeparent (BtDb *bt, BtPageSet *child, BtPageSet *parent, BtPageSet *right, BtPageSet *rparent, uint lvl)
-{
-unsigned char pagefence[256];
-uint idx;
-
-	//  pull right sibling over ourselves and unlock
-
-	memcpy (child->page, right->page, bt->mgr->page_size);
-
-	bt_unlockpage (BtLockWrite, child->latch);
-	bt_unpinlatch (child->latch);
-	bt_unpinpool (child->pool);
-
-	//  install ourselves into right link of old right page
-
-	bt_putid (right->page->right, child->page_no);
-	right->page->goright = 1;	// tell bt_loadpage to go right to us
-	right->page->kill = 1;
-
-	bt_unlockpage (BtLockWrite, right->latch);
-
-	//	remove our slot from our parent
-	//	signal to move right
-
-	parent->page->goright = 1;	// tell bt_loadpage to go right to rparent
-	parent->page->kill = 1;
-	parent->page->act--;
-
-	//	redirect right page pointer in right parent to us
-
-	for( idx = 0; idx++ < rparent->page->cnt; )
-	  if( !slotptr(rparent->page, idx)->dead )
-		break;
-
-	if( bt_getid (slotptr(rparent->page, idx)->id) != right->page_no )
-		return bt->err = BTERR_struct;
-
-	bt_putid (slotptr(rparent->page, idx)->id, child->page_no);
-	bt_unlockpage (BtLockWrite, rparent->latch);
-	bt_unpinlatch (rparent->latch);
-	bt_unpinpool (rparent->pool);
-
-	//	free the right page
-
-	bt_lockpage (BtLockDelete, right->latch);
-	bt_lockpage (BtLockWrite, right->latch);
-	bt_freepage (bt, right);
-
-	//	save parent page fence value
-
-	memcpy (pagefence, parent->page->fence, 256);
-	bt_unlockpage (BtLockWrite, parent->latch);
-
-	return bt_removepage (bt, parent, lvl, pagefence);
-}
-
-//	remove page from btree
-//	call with page unlocked
-//	returns with page on free list
-
-BTERR bt_removepage (BtDb *bt, BtPageSet *set, uint lvl, unsigned char *pagefence)
-{
-BtPageSet parent[1], sibling[1], rparent[1];
-unsigned char newfence[256];
-uint slot, idx;
-BtKey ptr;
-
-	//	load and lock our parent
-
-  while( 1 ) {
-	if( !(slot = bt_loadpage (bt, parent, pagefence+1, *pagefence, lvl+1, BtLockWrite)) )
-		return bt->err;
-
-	//	do we show up in our parent yet?
-
-	if( set->page_no != bt_getid (slotptr (parent->page, slot)->id) ) {
-		bt_unlockpage (BtLockWrite, parent->latch);
-		bt_unpinlatch (parent->latch);
-		bt_unpinpool (parent->pool);
-#ifdef linux
-		sched_yield();
-#else
-		SwitchToThread();
-#endif
-		continue;
-	}
-
-	//	can we do a simple merge entirely
-	//	between siblings on the parent page?
-
-	if( slot < parent->page->cnt ) {
-		// find our right neighbor
-		//	right must exist because the stopper prevents
-		//	the rightmost page from deleting
-
-		for( idx = slot; idx++ < parent->page->cnt; )
-		  if( !slotptr(parent->page, idx)->dead )
-			break;
-
-		sibling->page_no = bt_getid (slotptr (parent->page, idx)->id);
-
-		bt_lockpage (BtLockDelete, set->latch);
-		bt_lockpage (BtLockWrite, set->latch);
-
-		//	merge right if sibling shows up in
-		//  our parent and is not being killed
-
-		if( sibling->page_no == bt_getid (set->page->right) ) {
-		  sibling->latch = bt_pinlatch (bt, sibling->page_no);
-		  bt_lockpage (BtLockParent, sibling->latch);
-		  bt_lockpage (BtLockDelete, sibling->latch);
-		  bt_lockpage (BtLockWrite, sibling->latch);
-
-		  if( sibling->pool = bt_pinpool (bt, sibling->page_no) )
-			sibling->page = bt_page (bt, sibling->pool, sibling->page_no);
-		  else
-			return bt->err;
-
-		  if( !sibling->page->kill )
-			return bt_mergeright(bt, set, parent, sibling, slot, idx);
-
-		  //  try again later
-
-		  bt_unlockpage (BtLockWrite, sibling->latch);
-		  bt_unlockpage (BtLockParent, sibling->latch);
-		  bt_unlockpage (BtLockDelete, sibling->latch);
-		  bt_unpinlatch (sibling->latch);
-		  bt_unpinpool (sibling->pool);
-		}
-
-		bt_unlockpage (BtLockDelete, set->latch);
-		bt_unlockpage (BtLockWrite, set->latch);
-		bt_unlockpage (BtLockWrite, parent->latch);
-		bt_unpinlatch (parent->latch);
-		bt_unpinpool (parent->pool);
-#ifdef linux
-		sched_yield();
-#else
-		SwitchToThread();
-#endif
-		continue;
-	}
-
-	//  find our left neighbor in our parent page
-
-	for( idx = slot; --idx; )
-	  if( !slotptr(parent->page, idx)->dead )
-		break;
-
-	//	if no left neighbor, delete ourselves and our parent
-
-	if( !idx ) {
-		bt_lockpage (BtLockAccess, set->latch);
-		bt_lockpage (BtLockWrite, set->latch);
-		bt_unlockpage (BtLockAccess, set->latch);
-
-		rparent->page_no = bt_getid (parent->page->right);
-		rparent->latch = bt_pinlatch (bt, rparent->page_no);
-
-		bt_lockpage (BtLockAccess, rparent->latch);
-		bt_lockpage (BtLockWrite, rparent->latch);
-		bt_unlockpage (BtLockAccess, rparent->latch);
-
-		if( rparent->pool = bt_pinpool (bt, rparent->page_no) )
-			rparent->page = bt_page (bt, rparent->pool, rparent->page_no);
-		else
-			return bt->err;
-
-		if( !rparent->page->kill ) {
-		  sibling->page_no = bt_getid (set->page->right);
-		  sibling->latch = bt_pinlatch (bt, sibling->page_no);
-
-		  bt_lockpage (BtLockAccess, sibling->latch);
-		  bt_lockpage (BtLockWrite, sibling->latch);
-		  bt_unlockpage (BtLockAccess, sibling->latch);
-
-		  if( sibling->pool = bt_pinpool (bt, sibling->page_no) )
-			sibling->page = bt_page (bt, sibling->pool, sibling->page_no);
-		  else
-			return bt->err;
-
-		  if( !sibling->page->kill )
-			return bt_removeparent (bt, set, parent, sibling, rparent, lvl+1);
-
-		  //  try again later
-
-		  bt_unlockpage (BtLockWrite, sibling->latch);
-		  bt_unpinlatch (sibling->latch);
-		  bt_unpinpool (sibling->pool);
-		}
-
-		bt_unlockpage (BtLockWrite, set->latch);
-		bt_unlockpage (BtLockWrite, rparent->latch);
-		bt_unpinlatch (rparent->latch);
-		bt_unpinpool (rparent->pool);
-
-		bt_unlockpage (BtLockWrite, parent->latch);
-		bt_unpinlatch (parent->latch);
-		bt_unpinpool (parent->pool);
-#ifdef linux
-		sched_yield();
-#else
-		SwitchToThread();
-#endif
-		continue;
-	}
-
-	// redirect parent to our left sibling
-	// lock and map our left sibling's page
-
-	sibling->page_no = bt_getid (slotptr(parent->page, idx)->id);
-	sibling->latch = bt_pinlatch (bt, sibling->page_no);
-
-	//	wait our turn on fence key maintenance
-
-	bt_lockpage(BtLockParent, sibling->latch);
-	bt_lockpage(BtLockAccess, sibling->latch);
-	bt_lockpage(BtLockWrite, sibling->latch);
-	bt_unlockpage(BtLockAccess, sibling->latch);
-
-	if( sibling->pool = bt_pinpool (bt, sibling->page_no) )
-		sibling->page = bt_page (bt, sibling->pool, sibling->page_no);
-	else
-		return bt->err;
-
-	//  wait until left sibling is in our parent
-
-	if( bt_getid (sibling->page->right) != set->page_no ) {
-		bt_unlockpage (BtLockWrite, parent->latch);
-		bt_unlockpage (BtLockWrite, sibling->latch);
-		bt_unlockpage (BtLockParent, sibling->latch);
-		bt_unpinlatch (parent->latch);
-		bt_unpinpool (parent->pool);
-		bt_unpinlatch (sibling->latch);
-		bt_unpinpool (sibling->pool);
-#ifdef linux
-		sched_yield();
-#else
-		SwitchToThread();
-#endif
-		continue;
-	}
-
-	//	delete our left sibling from parent
-
-	slotptr(parent->page,idx)->dead = 1;
-	parent->page->dirty = 1;
-	parent->page->act--;
-
-	//	redirect our parent slot to our left sibling
-
-	bt_putid (slotptr(parent->page, slot)->id, sibling->page_no);
-	memcpy (sibling->page->right, set->page->right, BtId);
-
-	//	collapse dead slots from parent
-
-	while( idx = parent->page->cnt - 1 )
-	  if( slotptr(parent->page, idx)->dead ) {
-		*slotptr(parent->page, idx) = *slotptr(parent->page, parent->page->cnt);
-		memset (slotptr(parent->page, parent->page->cnt--), 0, sizeof(BtSlot));
-	  } else
-		  break;
-
-	//  free our original page
-
-	bt_lockpage (BtLockDelete, set->latch);
-	bt_lockpage (BtLockWrite, set->latch);
-	bt_freepage (bt, set);
-
-	//	go down the left node's fence keys to the leaf level
-	//	and update the fence keys in each page
-
-	memcpy (newfence, parent->page->fence, 256);
-
-	if( bt_fixfences (bt, sibling, newfence) )
-		return bt->err;
-
-	//  promote sibling as new root?
-
-	if( parent->page_no == ROOT_page && parent->page->cnt == 1 )
-	 if( sibling->page->lvl ) {
-	  sibling->latch = bt_pinlatch (bt, sibling->page_no);
-	  bt_lockpage (BtLockDelete, sibling->latch);
-	  bt_lockpage (BtLockWrite, sibling->latch);
-
-	  if( sibling->pool = bt_pinpool (bt, sibling->page_no) )
-		sibling->page = bt_page (bt, sibling->pool, sibling->page_no);
-	  else
-		return bt->err;
-
-	  return bt_removeroot (bt, parent, sibling);
-	 }
-
-	bt_unlockpage (BtLockWrite, parent->latch);
-	bt_unpinlatch (parent->latch);
-	bt_unpinpool (parent->pool);
-
-	return 0;
-  }
-}
-
 //  find and delete key on page by marking delete flag bit
 //  if page becomes empty, delete it from the btree
 
-BTERR bt_deletekey (BtDb *bt, unsigned char *key, uint len)
+BTERR bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl)
 {
-unsigned char pagefence[256];
-uint slot, idx, found;
-BtPageSet set[1];
+unsigned char lowerfence[256], higherfence[256];
+uint slot, idx, dirty = 0, fence, found;
+BtPageSet set[1], right[1];
 BtKey ptr;
 
-	if( slot = bt_loadpage (bt, set, key, len, 0, BtLockWrite) )
+	if( slot = bt_loadpage (bt, set, key, len, lvl, BtLockParentWrt) )
 		ptr = keyptr(set->page, slot);
 	else
 		return bt->err;
 
+	//	are we deleting a fence slot?
+
+	fence = slot == set->page->cnt;
+
 	// if key is found delete it, otherwise ignore request
 
-	if( found = slot <= set->page->cnt )
-	  if( found = !keycmp (ptr, key, len) )
-		if( found = slotptr(set->page, slot)->dead == 0 ) {
- 		  slotptr(set->page,slot)->dead = 1;
- 		  set->page->dirty = 1;
- 		  set->page->act--;
+	if( found = !keycmp (ptr, key, len) )
+	  if( found = slotptr(set->page, slot)->dead == 0 ) {
+		dirty = slotptr(set->page, slot)->dead = 1;
+ 		set->page->dirty = 1;
+ 		set->page->act--;
 
-		  // collapse empty slots
+		// collapse empty slots
 
-		  while( idx = set->page->cnt - 1 )
-			if( slotptr(set->page, idx)->dead ) {
-			  *slotptr(set->page, idx) = *slotptr(set->page, idx + 1);
-			  memset (slotptr(set->page, set->page->cnt--), 0, sizeof(BtSlot));
-			} else
-				break;
-		}
+		while( idx = set->page->cnt - 1 )
+		  if( slotptr(set->page, idx)->dead ) {
+			*slotptr(set->page, idx) = *slotptr(set->page, idx + 1);
+			memset (slotptr(set->page, set->page->cnt--), 0, sizeof(BtSlot));
+		  } else
+			break;
+	  }
+
+	//	did we delete a fence key in an upper level?
+
+	if( dirty && lvl && set->page->act && fence )
+	  if( bt_fixfence (bt, set, lvl) )
+		return bt->err;
+	  else
+		return bt->found = found, 0;
+
+	//	is this a collapsed root?
+
+	if( lvl > 1 && set->page_no == ROOT_page && set->page->act == 1 )
+	  if( bt_collapseroot (bt, set) )
+		return bt->err;
+	  else
+		return bt->found = found, 0;
+
+	//	return if page is not empty
 
  	if( set->page->act ) {
-		bt_unlockpage(BtLockWrite, set->latch);
+		bt_unlockpage(BtLockParentWrt, set->latch);
 		bt_unpinlatch (set->latch);
 		bt_unpinpool (set->pool);
 		return bt->found = found, 0;
 	}
 
-	memcpy (pagefence, set->page->fence, 256);
-	set->page->kill = 1;
+	//	cache copy of fence key
+	//	to post in parent
 
+	ptr = keyptr(set->page, set->page->cnt);
+	memcpy (lowerfence, ptr, ptr->len + 1);
+
+	//	obtain lock on right page
+
+	right->page_no = bt_getid(set->page->right);
+	right->latch = bt_pinlatch (bt, right->page_no);
+	bt_lockpage (BtLockParentWrt, right->latch);
+
+	// pin page contents
+
+	if( right->pool = bt_pinpool (bt, right->page_no) )
+		right->page = bt_page (bt, right->pool, right->page_no);
+	else
+		return 0;
+
+	if( right->page->kill )
+		return bt->err = BTERR_struct;
+
+	// pull contents of right peer into our empty page
+
+	memcpy (set->page, right->page, bt->mgr->page_size);
+
+	// cache copy of key to update
+
+	ptr = keyptr(right->page, right->page->cnt);
+	memcpy (higherfence, ptr, ptr->len + 1);
+
+	// mark right page deleted and point it to left page
+	//	until we can post parent updates
+
+	bt_putid (right->page->right, set->page_no);
+	right->page->kill = 1;
+
+	bt_unlockpage (BtLockWrite, right->latch);
 	bt_unlockpage (BtLockWrite, set->latch);
 
-	if( bt_removepage (bt, set, 0, pagefence) )
-		return bt->err;
+	// redirect higher key directly to our new node contents
 
+	if( bt_insertkey (bt, higherfence+1, *higherfence, lvl+1, set->page_no, time(NULL)) )
+	  return bt->err;
+
+	//	delete old lower key to our node
+
+	if( bt_deletekey (bt, lowerfence+1, *lowerfence, lvl+1) )
+	  return bt->err;
+
+	//	obtain delete and write locks to right node
+
+	bt_unlockpage (BtLockParent, right->latch);
+	bt_lockpage (BtLockDelete, right->latch);
+	bt_lockpage (BtLockWrite, right->latch);
+	bt_freepage (bt, right);
+
+	bt_unlockpage (BtLockParent, set->latch);
+	bt_unpinlatch (set->latch);
+	bt_unpinpool (set->pool);
 	bt->found = found;
 	return 0;
 }
@@ -2115,7 +1814,7 @@ BtKey ptr;
 
 uint bt_cleanpage(BtDb *bt, BtPage page, uint amt, uint slot)
 {
-uint nxt = bt->mgr->page_size, off;
+uint nxt = bt->mgr->page_size;
 uint cnt = 0, idx = 0;
 uint max = page->cnt;
 uint newslot = max;
@@ -2143,26 +1842,22 @@ BtKey key;
 	while( cnt++ < max ) {
 		if( cnt == slot )
 			newslot = idx + 1;
-		if( slotptr(bt->frame,cnt)->dead )
+		if( cnt < max && slotptr(bt->frame,cnt)->dead )
 			continue;
 
-		// if its not the fence key,
 		// copy the key across
 
-		off = slotptr(bt->frame,cnt)->off;
-
-		if( off >= sizeof(*page) ) {
-			key = keyptr(bt->frame, cnt);
-			off = nxt -= key->len + 1;
-			memcpy ((unsigned char *)page + nxt, key, key->len + 1);
-		}
+		key = keyptr(bt->frame, cnt);
+		nxt -= key->len + 1;
+		memcpy ((unsigned char *)page + nxt, key, key->len + 1);
 
 		// copy slot
 
 		memcpy(slotptr(page, ++idx)->id, slotptr(bt->frame, cnt)->id, BtId);
+		if( !(slotptr(page, idx)->dead = slotptr(bt->frame, cnt)->dead) )
+			page->act++;
 		slotptr(page, idx)->tod = slotptr(bt->frame, cnt)->tod;
-		slotptr(page, idx)->off = off;
-		page->act++;
+		slotptr(page, idx)->off = nxt;
 	}
 
 	page->min = nxt;
@@ -2178,42 +1873,38 @@ BtKey key;
 
 // split the root and raise the height of the btree
 
-BTERR bt_splitroot(BtDb *bt, BtPageSet *root, uid page_no2)
+BTERR bt_splitroot(BtDb *bt, BtPageSet *root, unsigned char *leftkey, uid page_no2)
 {
 uint nxt = bt->mgr->page_size;
-unsigned char leftkey[256];
-uid new_page;
+uid left;
 
 	//  Obtain an empty page to use, and copy the current
 	//  root contents into it, e.g. lower keys
 
-	memcpy (leftkey, root->page->fence, 256);
-	root->page->posted = 1;
-
-	if( !(new_page = bt_newpage(bt, root->page)) )
+	if( !(left = bt_newpage(bt, root->page)) )
 		return bt->err;
 
 	// preserve the page info at the bottom
 	// of higher keys and set rest to zero
 
 	memset(root->page+1, 0, bt->mgr->page_size - sizeof(*root->page));
-	memset(root->page->fence, 0, 256);
-	root->page->fence[0] = 2;
-	root->page->fence[1] = 0xff;
-	root->page->fence[2] = 0xff;
 
-	// insert lower keys page fence key on newroot page
+	// insert lower keys page fence key on newroot page as first key
 
 	nxt -= *leftkey + 1;
 	memcpy ((unsigned char *)root->page + nxt, leftkey, *leftkey + 1);
-	bt_putid(slotptr(root->page, 1)->id, new_page);
+	bt_putid(slotptr(root->page, 1)->id, left);
 	slotptr(root->page, 1)->off = nxt;
 	
 	// insert stopper key on newroot page
 	// and increase the root height
 
+	nxt -= 3;
+	((unsigned char *)root->page)[nxt] = 2;
+	((unsigned char *)root->page)[nxt+1] = 0xff;
+	((unsigned char *)root->page)[nxt+2] = 0xff;
 	bt_putid(slotptr(root->page, 2)->id, page_no2);
-	slotptr(root->page, 2)->off = offsetof(struct BtPage_, fence);
+	slotptr(root->page, 2)->off = nxt;
 
 	bt_putid(root->page->right, 0);
 	root->page->min = nxt;		// reset lowest used offset and key count
@@ -2234,11 +1925,12 @@ uid new_page;
 
 BTERR bt_splitpage (BtDb *bt, BtPageSet *set)
 {
-uint cnt = 0, idx = 0, max, nxt = bt->mgr->page_size, off;
+uint cnt = 0, idx = 0, max, nxt = bt->mgr->page_size;
 unsigned char fencekey[256];
 uint lvl = set->page->lvl;
 uid right;
 BtKey key;
+uint prev;
 
 	//  split higher half of keys to bt->frame
 
@@ -2248,23 +1940,17 @@ BtKey key;
 	idx = 0;
 
 	while( cnt++ < max ) {
-		if( !lvl || cnt < max ) {
-			key = keyptr(set->page, cnt);
-			off = nxt -= key->len + 1;
-			memcpy ((unsigned char *)bt->frame + nxt, key, key->len + 1);
-		} else
-			off = offsetof(struct BtPage_, fence);
+		key = keyptr(set->page, cnt);
+		nxt -= key->len + 1;
+		memcpy ((unsigned char *)bt->frame + nxt, key, key->len + 1);
 
 		memcpy(slotptr(bt->frame,++idx)->id, slotptr(set->page,cnt)->id, BtId);
+		if( !(slotptr(bt->frame, idx)->dead = slotptr(set->page, cnt)->dead) )
+			bt->frame->act++;
 		slotptr(bt->frame, idx)->tod = slotptr(set->page, cnt)->tod;
-		slotptr(bt->frame, idx)->off = off;
-		bt->frame->act++;
+		slotptr(bt->frame, idx)->off = nxt;
 	}
 
-	if( set->page_no == ROOT_page )
-		bt->frame->posted = 1;
-
-	memcpy (bt->frame->fence, set->page->fence, 256);
 	bt->frame->bits = bt->mgr->page_bits;
 	bt->frame->min = nxt;
 	bt->frame->cnt = idx;
@@ -2295,24 +1981,17 @@ BtKey key;
 
 	while( cnt++ < max / 2 ) {
 		key = keyptr(bt->frame, cnt);
-
-		if( !lvl || cnt < max / 2 ) {
-			off = nxt -= key->len + 1;
-			memcpy ((unsigned char *)set->page + nxt, key, key->len + 1);
-		} else 
-			off = offsetof(struct BtPage_, fence);
-
+		nxt -= key->len + 1;
+		memcpy ((unsigned char *)set->page + nxt, key, key->len + 1);
 		memcpy(slotptr(set->page,++idx)->id, slotptr(bt->frame,cnt)->id, BtId);
 		slotptr(set->page, idx)->tod = slotptr(bt->frame, cnt)->tod;
-		slotptr(set->page, idx)->off = off;
+		slotptr(set->page, idx)->off = nxt;
 		set->page->act++;
 	}
 
-	// install fence key for smaller key page
+	// remember fence key for smaller page
 
-	memset(set->page->fence, 0, 256);
-	memcpy(set->page->fence, key, key->len + 1);
-
+	memcpy(fencekey, key, key->len + 1);
 	bt_putid(set->page->right, right);
 	set->page->min = nxt;
 	set->page->cnt = idx;
@@ -2320,9 +1999,10 @@ BtKey key;
 	// if current page is the root page, split it
 
 	if( set->page_no == ROOT_page )
-		return bt_splitroot (bt, set, right);
+		return bt_splitroot (bt, set, fencekey, right);
 
 	bt_unlockpage (BtLockWrite, set->latch);
+	right = 0;
 
 	// insert new fences in their parent pages
 
@@ -2330,10 +2010,11 @@ BtKey key;
 		bt_lockpage (BtLockParent, set->latch);
 		bt_lockpage (BtLockWrite, set->latch);
 
-		memcpy (fencekey, set->page->fence, 256);
-		right = bt_getid (set->page->right);
+		key = keyptr (set->page, set->page->cnt);
+		memcpy (fencekey, key, key->len + 1);
+		prev = set->page->posted;
 
-		if( set->page->posted ) {
+		if( right && prev ) {
 			bt_unlockpage (BtLockParent, set->latch);
 			bt_unlockpage (BtLockWrite, set->latch);
 			bt_unpinlatch (set->latch);
@@ -2341,10 +2022,15 @@ BtKey key;
 			return 0;
 		}
 
+		right = bt_getid (set->page->right);
 		set->page->posted = 1;
+
 		bt_unlockpage (BtLockWrite, set->latch);
 
-		if( bt_insertkey (bt, fencekey+1, *fencekey, set->page_no, time(NULL), lvl+1) )
+		// insert new fence for reformulated left block of smaller keys
+
+		if( !prev )
+		  if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, set->page_no, time(NULL)) )
 			return bt->err;
 
 		bt_unlockpage (BtLockParent, set->latch);
@@ -2367,7 +2053,7 @@ BtKey key;
 
 //  Insert new key into the btree at given level.
 
-BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uid id, uint tod, uint lvl)
+BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uint lvl, uid id, uint tod)
 {
 BtPageSet set[1];
 uint slot, idx;
@@ -2385,8 +2071,7 @@ BtKey ptr;
 
 		// if key already exists, update id and return
 
-		if( slot <= set->page->cnt )
-		  if( !keycmp (ptr, key, len) ) {
+		if( !keycmp (ptr, key, len) ) {
 			if( slotptr(set->page, slot)->dead )
 				set->page->act++;
 			slotptr(set->page, slot)->dead = 0;
@@ -2413,14 +2098,14 @@ BtKey ptr;
 	((unsigned char *)set->page)[set->page->min] = len;
 	memcpy ((unsigned char *)set->page + set->page->min +1, key, len );
 
-	for( idx = slot; idx <= set->page->cnt; idx++ )
+	for( idx = slot; idx < set->page->cnt; idx++ )
 	  if( slotptr(set->page, idx)->dead )
 		break;
 
 	// now insert key into array before slot
 
-	if( idx > set->page->cnt )
-		set->page->cnt++;
+	if( idx == set->page->cnt )
+		idx++, set->page->cnt++;
 
 	set->page->act++;
 
@@ -2470,6 +2155,7 @@ uid right;
 
   do {
 	right = bt_getid(bt->cursor->right);
+
 	while( slot++ < bt->cursor->cnt )
 	  if( slotptr(bt->cursor,slot)->dead )
 		continue;
@@ -2497,6 +2183,7 @@ uid right;
 	bt_unpinlatch (set->latch);
 	bt_unpinpool (set->pool);
 	slot = 0;
+
   } while( 1 );
 
   return bt->err = 0;
@@ -2523,10 +2210,11 @@ uint bt_tod(BtDb *bt, uint slot)
 void bt_latchaudit (BtDb *bt)
 {
 ushort idx, hashidx;
+uid next, page_no;
 BtLatchSet *latch;
 BtPool *pool;
 BtPage page;
-uid page_no;
+BtKey ptr;
 
 #ifdef unix
 	for( idx = 1; idx < bt->mgr->latchmgr->latchdeployed; idx++ ) {
@@ -2563,18 +2251,21 @@ uid page_no;
 	  } while( idx = latch->next );
 	}
 
-	page_no = bt_getid(bt->mgr->latchmgr->alloc[1].right);
+	next = bt->mgr->latchmgr->nlatchpage + LATCH_page;
+	page_no = LEAF_page;
 
-	while( page_no ) {
-		fprintf(stderr, "free: %.6x\n", (uint)page_no);
+	while( page_no < bt_getid(bt->mgr->latchmgr->alloc->right) ) {
+		pread (bt->mgr->idx, bt->frame, bt->mgr->page_size, page_no << bt->mgr->page_bits);
+		if( !bt->frame->free )
+		 for( idx = 0; idx++ < bt->frame->cnt - 1; ) {
+		  ptr = keyptr(bt->frame, idx+1);
+		  if( keycmp (keyptr(bt->frame, idx), ptr->key, ptr->len) >= 0 )
+			fprintf(stderr, "page %.8x idx %.2x out of order\n", page_no, idx);
+		 }
 
-		if( pool = bt_pinpool (bt, page_no) )
-			page = bt_page (bt, pool, page_no);
-		else
-			return;
-
-	    page_no = bt_getid(page->right);
-		bt_unpinpool (pool);
+		if( page_no > LEAF_page )
+			next = page_no + 1;
+		page_no = next;
 	}
 #endif
 }
@@ -2631,7 +2322,7 @@ FILE *in;
 			  else if( args->num )
 		  		sprintf((char *)key+len, "%.9d", line + args->idx * args->num), len += 9;
 
-			  if( bt_insertkey (bt, key, len, line, *tod, 0) )
+			  if( bt_insertkey (bt, key, len, 0, line, *tod) )
 				fprintf(stderr, "Error %d Line: %d\n", bt->err, line), exit(0);
 			  len = 0;
 			}
@@ -2653,7 +2344,7 @@ FILE *in;
 			  else if( args->num )
 		  		sprintf((char *)key+len, "%.9d", line + args->idx * args->num), len += 9;
 
-			  if( bt_deletekey (bt, key, len) )
+			  if( bt_deletekey (bt, key, len, 0) )
 				fprintf(stderr, "Error %d Line: %d\n", bt->err, line), exit(0);
 			  len = 0;
 			}
@@ -2679,6 +2370,8 @@ FILE *in;
 				found++;
 			  else if( bt->err )
 				fprintf(stderr, "Error %d Syserr %d Line: %d\n", bt->err, errno, line), exit(0);
+			  else
+				fprintf(stderr, "Unable to find key %.*s line %d\n", len, key, line);
 			  len = 0;
 			}
 			else if( len < 255 )
