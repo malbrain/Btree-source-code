@@ -13,14 +13,6 @@ threads2i.c     Multi-Threaded/Multi-Process with latching implemented by a latc
 
 threads2j.c     Multi-Threaded/Multi-Process with latching implemented by a latch manager with test & set locks in the first few btree pages with Linux futex system calls during contention. Recommended for linux.
 
-The Foster code set includes the same three types of latching:
-
-Fosterbtreee.c  Multi-Threaded/Single Process with latching implemented by a latch manager with pthreads/SRW latches in the first few btree pages.
-
-Fosterbtreef.c  Multi-Threaded/Multi-Process with latching implemented by a latch manager with test & set latches  in the first few btree pages with thread yield  system calls during contention.
-
-Fosterbtreeg.c  Multi-Threaded/Multi-Process with latching implemented by a latch manager with test & set locks in the first few btree pages with Linux futex system calls during contention.
-
 Compilation is achieved on linux or Windows by:
 
 gcc -D STANDALONE threads2h.c -lpthread
