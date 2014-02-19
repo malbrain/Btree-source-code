@@ -101,15 +101,15 @@ enum {
 // share is count of read accessors
 // grant write lock when share == 0
 
-typedef struct {
-	volatile unsigned char mutex;		// 1 = busy
-	volatile unsigned char write:1;		// 1 = exclusive
-	volatile unsigned char readwait:1;	// readers are waiting
-	volatile unsigned char writewait:1;	// writers are waiting
-	volatile unsigned char filler:5;
-	volatile ushort share;				// count of readers holding locks
-	volatile ushort rcnt;				// count of waiting readers
-	volatile ushort wcnt;				// count of waiting writers
+volatile typedef struct {
+	unsigned char mutex[1];		// 1 = busy
+	unsigned char write:1;		// 1 = exclusive
+	unsigned char readwait:1;	// readers are waiting
+	unsigned char writewait:1;	// writers are waiting
+	unsigned char filler:5;
+	ushort share;				// count of readers holding locks
+	ushort rcnt;				// count of waiting readers
+	ushort wcnt;				// count of waiting writers
 } BtLatch;
 
 //	Define the length of the page and key pointers
@@ -153,10 +153,9 @@ typedef struct BtPage_ {
 	uint min;					// next key offset
 	unsigned char bits:7;		// page size in bits
 	unsigned char free:1;		// page is on free list
-	unsigned char lvl:5;		// level of page
+	unsigned char lvl:6;		// level of page
 	unsigned char kill:1;		// page is being deleted
 	unsigned char dirty:1;		// page has deleted keys
-	unsigned char posted:1;		// page fence has posted
 	unsigned char right[BtId];	// page number to right
 } *BtPage;
 
@@ -385,7 +384,7 @@ uint prev;
 
   while( 1 ) {
 	//	obtain latch mutex
-	while( __sync_lock_test_and_set(&latch->mutex, 1) )
+	while( __sync_lock_test_and_set(latch->mutex, 1) )
 		sched_yield();
 
 	if( decr )
@@ -398,7 +397,7 @@ uint prev;
 		latch->readwait = 1;
 		latch->rcnt++;
 		prev = *(uint *)latch & ~1;
-		__sync_lock_release (&latch->mutex);
+		__sync_lock_release (latch->mutex);
 		sys_futex( (uint *)latch, FUTEX_WAIT_BITSET | private, prev, NULL, NULL, QueRd );
 		decr = 1;
 		continue;
@@ -409,7 +408,7 @@ uint prev;
 
 	latch->readwait = 0;
 	latch->share++;
-	__sync_lock_release (&latch->mutex);
+	__sync_lock_release (latch->mutex);
 	return;
   }
 }
@@ -426,7 +425,7 @@ uint prev;
 
   while( 1 ) {
 	//	obtain latch mutex
-	while( __sync_lock_test_and_set(&latch->mutex, 1) )
+	while( __sync_lock_test_and_set(latch->mutex, 1) )
 		sched_yield();
 
 	if( decr )
@@ -438,7 +437,7 @@ uint prev;
 		latch->writewait = 1;
 		latch->wcnt++;
 		prev = *(uint *)latch & ~1;
-		__sync_lock_release (&latch->mutex);
+		__sync_lock_release (latch->mutex);
 		sys_futex( (uint *)latch, FUTEX_WAIT_BITSET | private, prev, NULL, NULL, QueWr );
 		decr = 1;
 		continue;
@@ -451,7 +450,7 @@ uint prev;
 		latch->writewait = 0;
 
 	latch->write = 1;
-	__sync_lock_release (&latch->mutex);
+	__sync_lock_release (latch->mutex);
 	return;
   }
 }
@@ -468,7 +467,7 @@ int ans;
 	//	try for mutex,
 	//	abandon request if not taken
 
-	if( __sync_lock_test_and_set(&latch->mutex, 1) )
+	if( __sync_lock_test_and_set(latch->mutex, 1) )
 		return 0;
 
 	//	see if write mode is available
@@ -480,7 +479,7 @@ int ans;
 
 	// release latch mutex
 
-	__sync_lock_release (&latch->mutex);
+	__sync_lock_release (latch->mutex);
 	return ans;
 }
 
@@ -493,7 +492,7 @@ void bt_spinreleasewrite(BtLatch *latch, int private)
 
 	//	obtain latch mutex
 
-	while( __sync_lock_test_and_set(&latch->mutex, 1) )
+	while( __sync_lock_test_and_set(latch->mutex, 1) )
 		sched_yield();
 
 	latch->write = 0;
@@ -510,7 +509,7 @@ void bt_spinreleasewrite(BtLatch *latch, int private)
 	// release latch mutex
 
 wakexit:
-	__sync_lock_release (&latch->mutex);
+	__sync_lock_release (latch->mutex);
 }
 
 //	decrement reader count
@@ -522,19 +521,19 @@ void bt_spinreleaseread(BtLatch *latch, int private)
 
 	//	obtain latch mutex
 
-	while( __sync_lock_test_and_set(&latch->mutex, 1) )
+	while( __sync_lock_test_and_set(latch->mutex, 1) )
 		sched_yield();
 
 	latch->share--;
 
-	// wake waiting writers
+	// wake one waiting writer
 
 	if( !latch->share && latch->wcnt )
 		sys_futex( (uint *)latch, FUTEX_WAKE_BITSET | private, 1, NULL, NULL, QueWr );
 
 	// release latch mutex
 
-	__sync_lock_release (&latch->mutex);
+	__sync_lock_release (latch->mutex);
 }
 
 //	link latch table entry into latch hash table

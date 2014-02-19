@@ -93,11 +93,11 @@ typedef enum{
 // share is count of read accessors
 // grant write lock when share == 0
 
-typedef struct {
-	volatile unsigned char mutex;
-	volatile unsigned char exclusive:1;
-	volatile unsigned char pending:1;
-	volatile ushort share;
+volatile typedef struct {
+	unsigned char mutex[1];
+	unsigned char exclusive:1;
+	unsigned char pending:1;
+	ushort share;
 } BtSpinLatch;
 
 //  hash table entries
@@ -162,10 +162,9 @@ typedef struct BtPage_ {
 	uint min;					// next key offset
 	unsigned char bits:7;		// page size in bits
 	unsigned char free:1;		// page is on free chain
-	unsigned char lvl:5;		// level of page
+	unsigned char lvl:6;		// level of page
 	unsigned char kill:1;		// page is being deleted
 	unsigned char dirty:1;		// page has deleted keys
-	unsigned char posted:1;		// page fence is posted
 	unsigned char right[BtId];	// page number to right
 } *BtPage;
 
@@ -366,10 +365,10 @@ ushort prev;
   do {
 	//	obtain latch mutex
 #ifdef unix
-	if( __sync_lock_test_and_set(&latch->mutex, 1) )
+	if( __sync_lock_test_and_set(latch->mutex, 1) )
 		continue;
 #else
-	if( _InterlockedExchange8(&latch->mutex, 1) )
+	if( _InterlockedExchange8(latch->mutex, 1) )
 		continue;
 #endif
 	//  see if exclusive request is granted or pending
@@ -378,9 +377,9 @@ ushort prev;
 		latch->share++;
 
 #ifdef unix
-	__sync_lock_release (&latch->mutex);
+	*latch->mutex = 0;
 #else
-	_InterlockedExchange8(&latch->mutex, 0);
+	_InterlockedExchange8(latch->mutex, 0);
 #endif
 
 	if( prev )
@@ -401,10 +400,10 @@ uint prev;
 
   do {
 #ifdef  unix
-	if( __sync_lock_test_and_set(&latch->mutex, 1) )
+	if( __sync_lock_test_and_set(latch->mutex, 1) )
 		continue;
 #else
-	if( _InterlockedExchange8(&latch->mutex, 1) )
+	if( _InterlockedExchange8(latch->mutex, 1) )
 		continue;
 #endif
 	if( prev = !(latch->share | latch->exclusive) )
@@ -412,9 +411,9 @@ uint prev;
 	else
 		latch->pending = 1;
 #ifdef unix
-	__sync_lock_release (&latch->mutex);
+	*latch->mutex = 0;
 #else
-	_InterlockedExchange8(&latch->mutex, 0);
+	_InterlockedExchange8(latch->mutex, 0);
 #endif
 	if( prev )
 		return;
@@ -435,10 +434,10 @@ int bt_spinwritetry(BtSpinLatch *latch)
 uint prev;
 
 #ifdef unix
-	if( __sync_lock_test_and_set(&latch->mutex, 1) )
+	if( __sync_lock_test_and_set(latch->mutex, 1) )
 		return 0;
 #else
-	if( _InterlockedExchange8(&latch->mutex, 1) )
+	if( _InterlockedExchange8(latch->mutex, 1) )
 		return 0;
 #endif
 	//	take write access if all bits are clear
@@ -447,9 +446,9 @@ uint prev;
 		latch->exclusive = 1;
 
 #ifdef unix
-	__sync_lock_release (&latch->mutex);
+	*latch->mutex = 0;
 #else
-	_InterlockedExchange8(&latch->mutex, 0);
+	_InterlockedExchange8(latch->mutex, 0);
 #endif
 	return prev;
 }
@@ -459,17 +458,17 @@ uint prev;
 void bt_spinreleasewrite(BtSpinLatch *latch)
 {
 #ifdef unix
-	while( __sync_lock_test_and_set(&latch->mutex, 1) )
+	while( __sync_lock_test_and_set(latch->mutex, 1) )
 		sched_yield();
 #else
-	while( _InterlockedExchange8(&latch->mutex, 1) )
+	while( _InterlockedExchange8(latch->mutex, 1) )
 		SwitchToThread();
 #endif
 	latch->exclusive = 0;
 #ifdef unix
-	__sync_lock_release (&latch->mutex);
+	*latch->mutex = 0;
 #else
-	_InterlockedExchange8(&latch->mutex, 0);
+	_InterlockedExchange8(latch->mutex, 0);
 #endif
 }
 
@@ -478,17 +477,17 @@ void bt_spinreleasewrite(BtSpinLatch *latch)
 void bt_spinreleaseread(BtSpinLatch *latch)
 {
 #ifdef unix
-	while( __sync_lock_test_and_set(&latch->mutex, 1) )
+	while( __sync_lock_test_and_set(latch->mutex, 1) )
 		sched_yield();
 #else
-	while( _InterlockedExchange8(&latch->mutex, 1) )
+	while( _InterlockedExchange8(latch->mutex, 1) )
 		SwitchToThread();
 #endif
 	latch->share--;
 #ifdef unix
-	__sync_lock_release (&latch->mutex);
+	*latch->mutex = 0;
 #else
-	_InterlockedExchange8(&latch->mutex, 0);
+	_InterlockedExchange8(latch->mutex, 0);
 #endif
 }
 
@@ -697,7 +696,7 @@ uint slot;
 	close (mgr->idx);
 	free (mgr->pool);
 	free (mgr->hash);
-	free (mgr->latch);
+	free ((void *)mgr->latch);
 	free (mgr);
 #else
 	FlushFileBuffers(mgr->idx);
