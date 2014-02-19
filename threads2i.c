@@ -1878,10 +1878,10 @@ uid left;
 BTERR bt_splitpage (BtDb *bt, BtPageSet *set)
 {
 uint cnt = 0, idx = 0, max, nxt = bt->mgr->page_size;
-unsigned char fencekey[256];
+unsigned char fencekey[256], rightkey[256];
 uint lvl = set->page->lvl;
+BtPageSet right[1];
 uint prev;
-uid right;
 BtKey key;
 
 	//  split higher half of keys to bt->frame
@@ -1903,6 +1903,10 @@ BtKey key;
 		slotptr(bt->frame, idx)->off = nxt;
 	}
 
+	// remember existing fence key for new page to the right
+
+	memcpy (rightkey, key, key->len + 1);
+
 	bt->frame->bits = bt->mgr->page_bits;
 	bt->frame->min = nxt;
 	bt->frame->cnt = idx;
@@ -1915,7 +1919,7 @@ BtKey key;
 
 	//	get new free page and write higher keys to it.
 
-	if( !(right = bt_newpage(bt, bt->frame)) )
+	if( !(right->page_no = bt_newpage(bt, bt->frame)) )
 		return bt->err;
 
 	//	update lower keys to continue in old page
@@ -1923,7 +1927,6 @@ BtKey key;
 	memcpy (bt->frame, set->page, bt->mgr->page_size);
 	memset (set->page+1, 0, bt->mgr->page_size - sizeof(*set->page));
 	nxt = bt->mgr->page_size;
-	set->page->posted = 0;
 	set->page->dirty = 0;
 	set->page->act = 0;
 	cnt = 0;
@@ -1944,65 +1947,42 @@ BtKey key;
 	// remember fence key for smaller page
 
 	memcpy(fencekey, key, key->len + 1);
-	bt_putid(set->page->right, right);
+
+	bt_putid(set->page->right, right->page_no);
 	set->page->min = nxt;
 	set->page->cnt = idx;
 
 	// if current page is the root page, split it
 
 	if( set->page_no == ROOT_page )
-		return bt_splitroot (bt, set, fencekey, right);
-
-	right = 0;
+		return bt_splitroot (bt, set, fencekey, right->page_no);
 
 	// insert new fences in their parent pages
 
-	while( 1 ) {
-		bt_lockpage (BtLockParent, set->latch);
+	right->latch = bt_pinlatch (bt, right->page_no);
+	bt_lockpage (BtLockParent, right->latch);
 
-		key = keyptr (set->page, set->page->cnt);
-		memcpy (fencekey, key, key->len + 1);
-		prev = set->page->posted;
+	bt_lockpage (BtLockParent, set->latch);
+	bt_unlockpage (BtLockWrite, set->latch);
 
-		if( right && prev ) {
-			bt_unlockpage (BtLockParent, set->latch);
-			bt_unlockpage (BtLockWrite, set->latch);
-			bt_unpinlatch (set->latch);
-			bt_unpinpool (set->pool);
-			return 0;
-		}
+	// insert new fence for reformulated left block of smaller keys
 
-		right = bt_getid (set->page->right);
-		set->page->posted = 1;
+	if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, set->page_no, time(NULL)) )
+		return bt->err;
 
-		bt_unlockpage (BtLockWrite, set->latch);
+	// switch fence for right block of larger keys to new right page
 
-		// insert new fence for reformulated left block of smaller keys
+	if( bt_insertkey (bt, rightkey+1, *rightkey, lvl+1, right->page_no, time(NULL)) )
+		return bt->err;
 
-		if( !prev )
-		  if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, set->page_no, time(NULL)) )
-			return bt->err;
+	bt_unlockpage (BtLockParent, set->latch);
+	bt_unpinlatch (set->latch);
+	bt_unpinpool (set->pool);
 
-		bt_unlockpage (BtLockParent, set->latch);
-		bt_unpinlatch (set->latch);
-		bt_unpinpool (set->pool);
-
-		if( !(set->page_no = right) )
-			break;
-
-		set->latch = bt_pinlatch (bt, right);
-
-		if( set->pool = bt_pinpool (bt, right) )
-			set->page = bt_page (bt, set->pool, right);
-		else
-			return bt->err;
-
-		bt_lockpage (BtLockWrite, set->latch);
-	}
-
+	bt_unlockpage (BtLockParent, right->latch);
+	bt_unpinlatch (right->latch);
 	return 0;
 }
-
 //  Insert new key into the btree at given level.
 
 BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uint lvl, uid id, uint tod)
