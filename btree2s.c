@@ -1592,6 +1592,9 @@ BtKey key;
 	if( bt_lockpage (bt, page_no, BtLockParent) )
 		return bt->err;
 
+	if( bt_unlockpage (bt, page_no, BtLockWrite) )
+		return bt->err;
+
 	// insert new fence for reformulated left block
 
 	if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, page_no, time(NULL)) )
