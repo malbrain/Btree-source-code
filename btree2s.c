@@ -396,7 +396,7 @@ BtHash *hash;
 		do munmap (hash->page, (bt->hashmask+1) << bt->page_bits);
 		while(hash = hash->lrunext);
 
-	if ( bt->mem )
+	if( bt->mem )
 		free (bt->mem);
 	close (bt->idx);
 	free (bt->cache);
@@ -410,7 +410,7 @@ BtHash *hash;
 		CloseHandle(hash->hmap);
 	  } while(hash = hash->lrunext);
 
-	if ( bt->mem)
+	if( bt->mem)
 		VirtualFree (bt->mem, 0, MEM_RELEASE);
 	FlushFileBuffers(bt->idx);
 	CloseHandle(bt->idx);
@@ -499,7 +499,7 @@ SYSTEM_INFO sysinfo[1];
 	else if( bits < BT_minbits )
 		bits = BT_minbits;
 
-	if ( bt_lockpage(bt, ALLOC_page, lockmode) )
+	if( bt_lockpage(bt, ALLOC_page, lockmode) )
 		return bt_close (bt), NULL;
 
 #ifdef unix
@@ -570,7 +570,7 @@ SYSTEM_INFO sysinfo[1];
 	bt->zero = (BtPage)(bt->mem + 5 * bt->page_size);
 
 	if( size || *amt ) {
-		if ( bt_unlockpage(bt, ALLOC_page, lockmode) )
+		if( bt_unlockpage(bt, ALLOC_page, lockmode) )
 			return bt_close (bt), NULL;
 
 		return bt;
@@ -672,12 +672,12 @@ BTERR bt_update (BtDb *bt, BtPage page, uid page_no)
 off64_t off = page_no << bt->page_bits;
 
 #ifdef unix
-    if ( !bt->mapped_io )
-	 if ( pwrite(bt->idx, page, bt->page_size, off) != bt->page_size )
+    if( !bt->mapped_io )
+	 if( pwrite(bt->idx, page, bt->page_size, off) != bt->page_size )
 		 return bt->err = BTERR_wrt;
 #else
 uint amt[1];
-	if ( !bt->mapped_io )
+	if( !bt->mapped_io )
 	{
 		SetFilePointer (bt->idx, (long)off, (long*)(&off)+1, FILE_BEGIN);
 		if( !WriteFile (bt->idx, (char *)page, bt->page_size, amt, NULL) )
@@ -686,7 +686,7 @@ uint amt[1];
 		if( *amt < bt->page_size )
 			return GetLastError(), bt->err = BTERR_wrt;
 	} 
-	else if ( bt->mode == BT_fl ) {
+	else if( bt->mode == BT_fl ) {
 			FlushViewOfFile(page, bt->page_size);
 			FlushFileBuffers(bt->idx);
 	}
@@ -874,7 +874,7 @@ int amt[1];
 		return bt->err;
 	}
 #ifdef unix
-	if ( pread(bt->idx, *page, bt->page_size, off) < bt->page_size )
+	if( pread(bt->idx, *page, bt->page_size, off) < bt->page_size )
 		return bt->err = BTERR_map;
 #else
 	SetFilePointer (bt->idx, (long)off, (long*)(&off)+1, FILE_BEGIN);
@@ -898,7 +898,7 @@ BTERR bt_freepage(BtDb *bt, uid page_no)
 
 	//	lock allocation page
 
-	if ( bt_lockpage(bt, ALLOC_page, BtLockWrite) )
+	if( bt_lockpage(bt, ALLOC_page, BtLockWrite) )
 		return bt->err;
 
 	if( bt_mappage (bt, &bt->alloc, ALLOC_page) )
@@ -942,7 +942,7 @@ int reuse;
 
 	// lock page zero
 
-	if ( bt_lockpage(bt, ALLOC_page, BtLockWrite) )
+	if( bt_lockpage(bt, ALLOC_page, BtLockWrite) )
 		return 0;
 
 	if( bt_mappage (bt, &bt->alloc, ALLOC_page) )
@@ -971,23 +971,23 @@ int reuse;
 
 		// unlock page zero 
 
-		if ( bt_unlockpage(bt, ALLOC_page, BtLockWrite) )
+		if( bt_unlockpage(bt, ALLOC_page, BtLockWrite) )
 			return 0;
 
 		return new_page;
 	}
 
 #ifdef unix
-	if ( pwrite(bt->idx, page, bt->page_size, new_page << bt->page_bits) < bt->page_size )
+	if( pwrite(bt->idx, page, bt->page_size, new_page << bt->page_bits) < bt->page_size )
 		return bt->err = BTERR_wrt, 0;
 
 	// if writing first page of hash block, zero last page in the block
 
-	if ( !reuse && bt->hashmask > 0 && (new_page & bt->hashmask) == 0 )
+	if( !reuse && bt->hashmask > 0 && (new_page & bt->hashmask) == 0 )
 	{
 		// use temp buffer to write zeros
 		memset(bt->zero, 0, bt->page_size);
-		if ( pwrite(bt->idx,bt->zero, bt->page_size, (new_page | bt->hashmask) << bt->page_bits) < bt->page_size )
+		if( pwrite(bt->idx,bt->zero, bt->page_size, (new_page | bt->hashmask) << bt->page_bits) < bt->page_size )
 			return bt->err = BTERR_wrt, 0;
 	}
 #else
@@ -1002,7 +1002,7 @@ int reuse;
 
 	// unlock page zero 
 
-	if ( bt_unlockpage(bt, ALLOC_page, BtLockWrite) )
+	if( bt_unlockpage(bt, ALLOC_page, BtLockWrite) )
 		return 0;
 
 	return new_page;
@@ -1082,7 +1082,7 @@ uint mode, prevmode;
 	// re-read and re-lock root after determining actual level of root
 
 	if( bt->page->lvl != drill) {
-		if ( bt->page_no != ROOT_page )
+		if( bt->page_no != ROOT_page )
 			return bt->err = BTERR_struct, 0;
 			
 		drill = bt->page->lvl;
@@ -1285,7 +1285,7 @@ BtKey ptr;
 
 	// obtain lock on right page
 
-	if ( bt_lockpage(bt, right, BtLockWrite) )
+	if( bt_lockpage(bt, right, BtLockWrite) )
 		return bt->err;
 
 	if( bt_mappage (bt, &bt->temp, right) )
@@ -1378,7 +1378,7 @@ uid id;
 	else
 		id = 0;
 
-	if ( bt_unlockpage(bt, bt->page_no, BtLockRead) )
+	if( bt_unlockpage(bt, bt->page_no, BtLockRead) )
 		return 0;
 
 	return id;
@@ -1626,7 +1626,7 @@ BtKey ptr;
 		ptr = keyptr(bt->page, slot);
 	else
 	{
-		if ( !bt->err )
+		if( !bt->err )
 			bt->err = BTERR_ovflw;
 		return bt->err;
 	}
@@ -1641,7 +1641,7 @@ BtKey ptr;
 	  slotptr(page, slot)->dead = 0;
 	  slotptr(page, slot)->tod = tod;
 	  bt_putid(slotptr(page,slot)->id, id);
-	  if ( bt_update(bt, bt->page, bt->page_no) )
+	  if( bt_update(bt, bt->page, bt->page_no) )
 		return bt->err;
 	  return bt_unlockpage(bt, bt->page_no, BtLockWrite);
 	}
@@ -1702,7 +1702,7 @@ uint slot;
 
 	bt->cursor_page = bt->page_no;
 
-	if ( bt_unlockpage(bt, bt->page_no, BtLockRead) )
+	if( bt_unlockpage(bt, bt->page_no, BtLockRead) )
 	  return 0;
 
 	return slot;
@@ -1739,7 +1739,7 @@ off64_t right;
 
 	memcpy (bt->cursor, bt->page, bt->page_size);
 
-	if ( bt_unlockpage(bt, right, BtLockRead) )
+	if( bt_unlockpage(bt, right, BtLockRead) )
 		return 0;
 
 	slot = 0;
@@ -1766,6 +1766,56 @@ uint bt_tod(BtDb *bt, uint slot)
 
 
 #ifdef STANDALONE
+
+#ifndef unix
+double getCpuTime(int type)
+{
+FILETIME crtime[1];
+FILETIME xittime[1];
+FILETIME systime[1];
+FILETIME usrtime[1];
+SYSTEMTIME timeconv[1];
+double ans;
+
+	GetProcessTimes (GetCurrentProcess(), crtime, xittime, systime, usrtime);
+	memset (timeconv, 0, sizeof(SYSTEMTIME));
+
+	switch( type ) {
+	case 1:
+		FileTimeToSystemTime (usrtime, timeconv);
+		break;
+	case 2:
+		FileTimeToSystemTime (systime, timeconv);
+		break;
+	}
+
+	ans = (double)timeconv->wHour * 3600;
+	ans += (double)timeconv->wMinute * 60;
+	ans += (double)timeconv->wSecond;
+	ans += (double)timeconv->wMilliseconds / 1000;
+	return ans;
+}
+#else
+#include <sys/time.h>
+#include <sys/resource.h>
+
+double getCpuTime(int type)
+{
+struct rusage used[1];
+
+	getrusage(RUSAGE_SELF, used);
+	switch( type ) {
+	case 1:
+		return (double)used->ru_utime.tv_sec + (double)used->ru_utime.tv_usec / 1000000;
+
+	case 2:
+		return (double)used->ru_stime.tv_sec + (double)used->ru_stime.tv_usec / 1000000;
+	}
+
+	return 0;
+}
+#endif
+
 //  standalone program to index file of keys
 //  then list them onto std-out
 
@@ -1776,6 +1826,7 @@ int dead, ch, cnt = 0, bits = 12;
 unsigned char key[256];
 clock_t done, start;
 uint pgblk = 0;
+float elapsed;
 time_t tod[1];
 uint scan = 0;
 uint len = 0;
@@ -1888,7 +1939,12 @@ FILE *in;
 	}
 
 	done = clock();
-	fprintf(stderr, " Time to complete: %.2f seconds\n", (float)(done - start) / CLOCKS_PER_SEC);
+	elapsed = (float)(done - start)/CLOCKS_PER_SEC;
+	fprintf(stderr, " real %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+	elapsed = getCpuTime(1);
+	fprintf(stderr, " user %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+	elapsed = getCpuTime(2);
+	fprintf(stderr, " sys  %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
 
 	dead = cnt = 0;
 	len = key[0] = 0;

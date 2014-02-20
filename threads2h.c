@@ -790,7 +790,7 @@ uint slot;
 	CloseHandle(mgr->idx);
 	GlobalFree (mgr->pool);
 	GlobalFree (mgr->hash);
-	GlobalFree (mgr->latch);
+	GlobalFree ((void *)mgr->latch);
 	GlobalFree (mgr);
 #endif
 }
@@ -2225,6 +2225,55 @@ uint bt_tod(BtDb *bt, uint slot)
 
 #ifdef STANDALONE
 
+#ifndef unix
+double getCpuTime(int type)
+{
+FILETIME crtime[1];
+FILETIME xittime[1];
+FILETIME systime[1];
+FILETIME usrtime[1];
+SYSTEMTIME timeconv[1];
+double ans;
+
+	GetProcessTimes (GetCurrentProcess(), crtime, xittime, systime, usrtime);
+	memset (timeconv, 0, sizeof(SYSTEMTIME));
+
+	switch( type ) {
+	case 1:
+		FileTimeToSystemTime (usrtime, timeconv);
+		break;
+	case 2:
+		FileTimeToSystemTime (systime, timeconv);
+		break;
+	}
+
+	ans = (double)timeconv->wHour * 3600;
+	ans += (double)timeconv->wMinute * 60;
+	ans += (double)timeconv->wSecond;
+	ans += (double)timeconv->wMilliseconds / 1000;
+	return ans;
+}
+#else
+#include <sys/time.h>
+#include <sys/resource.h>
+
+double getCpuTime(int type)
+{
+struct rusage used[1];
+
+	getrusage(RUSAGE_SELF, used);
+	switch( type ) {
+	case 1:
+		return (double)used->ru_utime.tv_sec + (double)used->ru_utime.tv_usec / 1000000;
+
+	case 2:
+		return (double)used->ru_stime.tv_sec + (double)used->ru_stime.tv_usec / 1000000;
+	}
+
+	return 0;
+}
+#endif
+
 void bt_latchaudit (BtDb *bt)
 {
 ushort idx, hashidx;
@@ -2464,6 +2513,7 @@ HANDLE *threads;
 double real_time;
 ThreadArg *args;
 uint poolsize = 0;
+float elapsed;
 int num = 0;
 char key[1];
 BtMgr *mgr;
@@ -2553,7 +2603,13 @@ BtDb *bt;
 	time (stop);
 	real_time = 1000 * (*stop - *start);
 #endif
-	fprintf(stderr, " Time to complete: %.2f seconds\n", real_time/1000);
+	elapsed = real_time / 1000;
+	fprintf(stderr, " real %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+	elapsed = getCpuTime(1);
+	fprintf(stderr, " user %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+	elapsed = getCpuTime(2);
+	fprintf(stderr, " sys  %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+
 	bt_mgrclose (mgr);
 }
 
