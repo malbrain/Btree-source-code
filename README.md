@@ -15,7 +15,7 @@ threads2j.c     Multi-Threaded/Multi-Process with latching implemented by a latc
 
 Compilation is achieved on linux or Windows by:
 
-gcc -D STANDALONE threads2h.c -lpthread
+gcc -D STANDALONE threads2h.c -lpthread -lrt
 
 or
 
