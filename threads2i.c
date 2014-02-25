@@ -713,10 +713,10 @@ uint slot;
 void bt_close (BtDb *bt)
 {
 #ifdef unix
-	if ( bt->mem )
+	if( bt->mem )
 		free (bt->mem);
 #else
-	if ( bt->mem)
+	if( bt->mem)
 		VirtualFree (bt->mem, 0, MEM_RELEASE);
 #endif
 	free (bt);
@@ -1333,15 +1333,15 @@ int reuse;
 		reuse = 0;
 	}
 #ifdef unix
-	if ( pwrite(bt->mgr->idx, page, bt->mgr->page_size, new_page << bt->mgr->page_bits) < bt->mgr->page_size )
+	if( pwrite(bt->mgr->idx, page, bt->mgr->page_size, new_page << bt->mgr->page_bits) < bt->mgr->page_size )
 		return bt->err = BTERR_wrt, 0;
 
 	// if writing first page of pool block, zero last page in the block
 
-	if ( !reuse && bt->mgr->poolmask > 0 && (new_page & bt->mgr->poolmask) == 0 )
+	if( !reuse && bt->mgr->poolmask > 0 && (new_page & bt->mgr->poolmask) == 0 )
 	{
 		// use zero buffer to write zeros
-		if ( pwrite(bt->mgr->idx,bt->zero, bt->mgr->page_size, (new_page | bt->mgr->poolmask) << bt->mgr->page_bits) < bt->mgr->page_size )
+		if( pwrite(bt->mgr->idx,bt->zero, bt->mgr->page_size, (new_page | bt->mgr->poolmask) << bt->mgr->page_bits) < bt->mgr->page_size )
 			return bt->err = BTERR_wrt, 0;
 	}
 #else
@@ -1449,7 +1449,7 @@ BtPool *prevpool;
 	// re-read and re-lock root after determining actual level of root
 
 	if( set->page->lvl != drill) {
-		if ( set->page_no != ROOT_page )
+		if( set->page_no != ROOT_page )
 			return bt->err = BTERR_struct, 0;
 			
 		drill = set->page->lvl;
@@ -1995,7 +1995,7 @@ BtKey ptr;
 			ptr = keyptr(set->page, slot);
 		else
 		{
-			if ( !bt->err )
+			if( !bt->err )
 				bt->err = BTERR_ovflw;
 			return bt->err;
 		}
@@ -2145,40 +2145,52 @@ FILETIME xittime[1];
 FILETIME systime[1];
 FILETIME usrtime[1];
 SYSTEMTIME timeconv[1];
-double ans;
+double ans = 0;
 
-	GetProcessTimes (GetCurrentProcess(), crtime, xittime, systime, usrtime);
 	memset (timeconv, 0, sizeof(SYSTEMTIME));
 
 	switch( type ) {
+	case 0:
+		GetSystemTimeAsFileTime (xittime);
+		FileTimeToSystemTime (xittime, timeconv);
+		ans = (double)timeconv->wDayOfWeek * 3600 * 24;
+		break;
 	case 1:
+		GetProcessTimes (GetCurrentProcess(), crtime, xittime, systime, usrtime);
 		FileTimeToSystemTime (usrtime, timeconv);
 		break;
 	case 2:
+		GetProcessTimes (GetCurrentProcess(), crtime, xittime, systime, usrtime);
 		FileTimeToSystemTime (systime, timeconv);
 		break;
 	}
 
-	ans = (double)timeconv->wHour * 3600;
+	ans += (double)timeconv->wHour * 3600;
 	ans += (double)timeconv->wMinute * 60;
 	ans += (double)timeconv->wSecond;
 	ans += (double)timeconv->wMilliseconds / 1000;
 	return ans;
 }
 #else
-#include <sys/time.h>
+#include <time.h>
 #include <sys/resource.h>
 
 double getCpuTime(int type)
 {
 struct rusage used[1];
+struct timeval tv[1];
 
-	getrusage(RUSAGE_SELF, used);
 	switch( type ) {
+	case 0:
+		gettimeofday(tv, NULL);
+		return (double)tv->tv_sec + (double)tv->tv_usec / 1000000;
+
 	case 1:
+		getrusage(RUSAGE_SELF, used);
 		return (double)used->ru_utime.tv_sec + (double)used->ru_utime.tv_usec / 1000000;
 
 	case 2:
+		getrusage(RUSAGE_SELF, used);
 		return (double)used->ru_stime.tv_sec + (double)used->ru_stime.tv_usec / 1000000;
 	}
 
@@ -2190,26 +2202,50 @@ void bt_latchaudit (BtDb *bt)
 {
 ushort idx, hashidx;
 uid next, page_no;
-BtPageSet set[1];
+BtLatchSet *latch;
 BtKey ptr;
 
 #ifdef unix
+	if( *(uint *)(bt->mgr->latchmgr->lock) )
+		fprintf(stderr, "Alloc page locked\n");
+	*(uint *)(bt->mgr->latchmgr->lock) = 0;
+
 	for( idx = 1; idx < bt->mgr->latchmgr->latchdeployed; idx++ ) {
-		set->latch = bt->mgr->latchsets + idx;
-		if( set->latch->pin ) {
-			fprintf(stderr, "latchset %d pinned for page %.6x\n", idx, set->latch->page_no);
-			set->latch->pin = 0;
+		latch = bt->mgr->latchsets + idx;
+		if( *(uint *)latch->readwr )
+			fprintf(stderr, "latchset %d rwlocked for page %.8x\n", idx, latch->page_no);
+		*(uint *)latch->readwr = 0;
+
+		if( *(uint *)latch->access )
+			fprintf(stderr, "latchset %d accesslocked for page %.8x\n", idx, latch->page_no);
+		*(uint *)latch->access = 0;
+
+		if( *(uint *)latch->parent )
+			fprintf(stderr, "latchset %d parentlocked for page %.8x\n", idx, latch->page_no);
+		*(uint *)latch->parent = 0;
+
+		if( latch->pin ) {
+			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no);
+			latch->pin = 0;
 		}
 	}
 
 	for( hashidx = 0; hashidx < bt->mgr->latchmgr->latchhash; hashidx++ ) {
+	  if( *(uint *)(bt->mgr->latchmgr->table[hashidx].latch) )
+			fprintf(stderr, "hash entry %d locked\n", hashidx);
+
+	  *(uint *)(bt->mgr->latchmgr->table[hashidx].latch) = 0;
+
 	  if( idx = bt->mgr->latchmgr->table[hashidx].slot ) do {
-		set->latch = bt->mgr->latchsets + idx;
-		if( set->latch->hash != hashidx )
+		latch = bt->mgr->latchsets + idx;
+		if( *(uint *)latch->busy )
+			fprintf(stderr, "latchset %d busylocked for page %.8x\n", idx, latch->page_no);
+		*(uint *)latch->busy = 0;
+		if( latch->hash != hashidx )
 			fprintf(stderr, "latchset %d wrong hashidx\n", idx);
-		if( set->latch->pin )
-			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, set->latch->page_no);
-	  } while( idx = set->latch->next );
+		if( latch->pin )
+			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no);
+	  } while( idx = latch->next );
 	}
 
 	next = bt->mgr->latchmgr->nlatchpage + LATCH_page;
@@ -2415,14 +2451,12 @@ int main (int argc, char **argv)
 {
 int idx, cnt, len, slot, err;
 int segsize, bits = 16;
+double start, stop;
 #ifdef unix
 pthread_t *threads;
-timer start, stop;
 #else
-time_t start[1], stop[1];
 HANDLE *threads;
 #endif
-double real_time;
 ThreadArg *args;
 uint poolsize = 0;
 float elapsed;
@@ -2442,11 +2476,7 @@ BtDb *bt;
 		exit(0);
 	}
 
-#ifdef unix
-	gettimeofday(&start, NULL);
-#else
-	time(start);
-#endif
+	start = getCpuTime(0);
 
 	if( argc > 3 )
 		bits = atoi(argv[3]);
@@ -2504,18 +2534,14 @@ BtDb *bt;
 #ifdef unix
 	for( idx = 0; idx < cnt; idx++ )
 		pthread_join (threads[idx], NULL);
-	gettimeofday(&stop, NULL);
-	real_time = 1000.0 * ( stop.tv_sec - start.tv_sec ) + 0.001 * (stop.tv_usec - start.tv_usec );
 #else
 	WaitForMultipleObjects (cnt, threads, TRUE, INFINITE);
 
 	for( idx = 0; idx < cnt; idx++ )
 		CloseHandle(threads[idx]);
 
-	time (stop);
-	real_time = 1000 * (*stop - *start);
 #endif
-	elapsed = real_time / 1000;
+	elapsed = getCpuTime(0) - start;
 	fprintf(stderr, " real %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
 	elapsed = getCpuTime(1);
 	fprintf(stderr, " user %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
