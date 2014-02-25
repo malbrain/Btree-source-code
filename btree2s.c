@@ -1,5 +1,6 @@
 // btree version 2s
-// 18 FEB 2014
+//	with reworked bt_deletekey code
+// 25 FEB 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -1775,40 +1776,52 @@ FILETIME xittime[1];
 FILETIME systime[1];
 FILETIME usrtime[1];
 SYSTEMTIME timeconv[1];
-double ans;
+double ans = 0;
 
-	GetProcessTimes (GetCurrentProcess(), crtime, xittime, systime, usrtime);
 	memset (timeconv, 0, sizeof(SYSTEMTIME));
 
 	switch( type ) {
+	case 0:
+		GetSystemTimeAsFileTime (xittime);
+		FileTimeToSystemTime (xittime, timeconv);
+		ans = (double)timeconv->wDayOfWeek * 3600 * 24;
+		break;
 	case 1:
+		GetProcessTimes (GetCurrentProcess(), crtime, xittime, systime, usrtime);
 		FileTimeToSystemTime (usrtime, timeconv);
 		break;
 	case 2:
+		GetProcessTimes (GetCurrentProcess(), crtime, xittime, systime, usrtime);
 		FileTimeToSystemTime (systime, timeconv);
 		break;
 	}
 
-	ans = (double)timeconv->wHour * 3600;
+	ans += (double)timeconv->wHour * 3600;
 	ans += (double)timeconv->wMinute * 60;
 	ans += (double)timeconv->wSecond;
 	ans += (double)timeconv->wMilliseconds / 1000;
 	return ans;
 }
 #else
-#include <sys/time.h>
+#include <time.h>
 #include <sys/resource.h>
 
 double getCpuTime(int type)
 {
 struct rusage used[1];
+struct timeval tv[1];
 
-	getrusage(RUSAGE_SELF, used);
 	switch( type ) {
+	case 0:
+		gettimeofday(tv, NULL);
+		return (double)tv->tv_sec + (double)tv->tv_usec / 1000000;
+
 	case 1:
+		getrusage(RUSAGE_SELF, used);
 		return (double)used->ru_utime.tv_sec + (double)used->ru_utime.tv_usec / 1000000;
 
 	case 2:
+		getrusage(RUSAGE_SELF, used);
 		return (double)used->ru_stime.tv_sec + (double)used->ru_stime.tv_usec / 1000000;
 	}
 
@@ -1824,7 +1837,7 @@ int main (int argc, char **argv)
 uint slot, line = 0, off = 0, found = 0;
 int dead, ch, cnt = 0, bits = 12;
 unsigned char key[256];
-clock_t done, start;
+double done, start;
 uint pgblk = 0;
 float elapsed;
 time_t tod[1];
@@ -1843,7 +1856,7 @@ FILE *in;
 		exit(0);
 	}
 
-	start = clock();
+	start = getCpuTime(0);
 	time(tod);
 
 	if( argc > 4 )
@@ -1891,7 +1904,7 @@ FILE *in;
 			}
 			else if( len < 245 )
 				key[len++] = ch;
-		fprintf(stderr, "finished adding keys, %d \n", line);
+		fprintf(stderr, "finished adding keys for %s, %d \n", argv[2], line);
 		break;
 
 	case 'd':
@@ -1909,7 +1922,7 @@ FILE *in;
 			}
 			else if( len < 245 )
 				key[len++] = ch;
-		fprintf(stderr, "finished deleting keys, %d \n", line);
+		fprintf(stderr, "finished deleting keys for %s, %d \n", argv[2], line);
 		break;
 
 	case 'f':
@@ -1929,7 +1942,7 @@ FILE *in;
 			}
 			else if( len < 245 )
 				key[len++] = ch;
-		fprintf(stderr, "finished search of %d keys, found %d\n", line, found);
+		fprintf(stderr, "finished search of %d keys for %s, found %d\n", line, argv[2], found);
 		break;
 
 	case 's':
@@ -1938,8 +1951,8 @@ FILE *in;
 
 	}
 
-	done = clock();
-	elapsed = (float)(done - start)/CLOCKS_PER_SEC;
+	done = getCpuTime(0);
+	elapsed = (float)(done - start);
 	fprintf(stderr, " real %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
 	elapsed = getCpuTime(1);
 	fprintf(stderr, " user %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
