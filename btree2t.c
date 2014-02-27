@@ -355,6 +355,7 @@ BtKey ptr;
 	ptr = keyptr(page, page->cnt);
 	fprintf(stderr, "fence='%.*s'\n", ptr->len, ptr->key);
 	fprintf(stderr, "right=%.8x\n", bt_getid(page->right));
+	return bt->err = err;
 }
 
 //	Latch Manager
@@ -672,6 +673,14 @@ void bt_close (BtDb *bt)
 {
 BtHash *hash;
 #ifdef unix
+	munmap (bt->latchsets, bt->latchmgr->nlatchpage * bt->page_size);
+	munmap (bt->latchmgr, bt->page_size);
+#else
+	FlushViewOfFile(bt->latchmgr, 0);
+	UnmapViewOfFile(bt->latchmgr);
+	CloseHandle(bt->halloc);
+#endif
+#ifdef unix
 	// release mapped pages
 
 	if( hash = bt->lrufirst )
@@ -718,6 +727,9 @@ int flag;
 
 #ifndef unix
 SYSTEM_INFO sysinfo[1];
+OVERLAPPED ovl[1];
+#else
+struct flock lock[1];
 #endif
 
 	// determine sanity of page size and buffer pool
@@ -750,6 +762,30 @@ SYSTEM_INFO sysinfo[1];
 	cacheblk = sysinfo->dwAllocationGranularity;
 #endif
 
+#ifdef unix
+	memset (lock, 0, sizeof(lock));
+
+	lock->l_type = F_WRLCK;
+	lock->l_len = sizeof(struct BtPage_);
+	lock->l_whence = 0;
+
+	if( fcntl (bt->idx, F_SETLKW, lock) < 0 )
+		return bt_close (bt), NULL;
+#else
+	memset (ovl, 0, sizeof(ovl));
+	len = sizeof(struct BtPage_);
+
+	//	use large offsets to
+	//	simulate advisory locking
+
+	ovl->OffsetHigh |= 0x80000000;
+
+	if( mode == BtLockDelete || mode == BtLockWrite || mode == BtLockParent )
+		flags |= LOCKFILE_EXCLUSIVE_LOCK;
+
+	if( LockFileEx (bt->idx, flags, 0, len, 0L, ovl) )
+		return bt_close (bt), NULL;
+#endif 
 #ifdef unix
 	latchmgr = malloc (BT_maxpage);
 	*amt = 0;
@@ -810,8 +846,9 @@ SYSTEM_INFO sysinfo[1];
 	  bt->mapped_io = 1;
 	}
 
-	if( size || *amt )
+	if( size || *amt ) {
 		goto btlatch;
+	}
 
 	// initialize an empty b-tree with latch page, root page, page of leaves
 	// and page(s) of latches
@@ -892,6 +929,14 @@ SYSTEM_INFO sysinfo[1];
 	}
 
 btlatch:
+#ifdef unix
+	lock->l_type = F_UNLCK;
+	if( fcntl (bt->idx, F_SETLK, lock) < 0 )
+		return bt_close (bt), NULL;
+#else
+	if( !UnlockFileEx (bt->idx, 0, sizeof(struct BtPage_), 0, ovl) )
+		return bt_close (bt), NULL;
+#endif
 #ifdef unix
 	flag = PROT_READ | PROT_WRITE;
 	bt->latchmgr = mmap (0, bt->page_size, flag, MAP_SHARED, bt->idx, ALLOC_page * bt->page_size);
@@ -1389,7 +1434,7 @@ uint mode, prevmode;
 
 	// re-read and re-lock root after determining actual level of root
 
-	if( bt->page->lvl < drill) {
+	if( bt->page->lvl != drill) {
 		if( bt->page_no != ROOT_page )
 			return bt->err = BTERR_struct, 0;
 			
@@ -2088,23 +2133,23 @@ uint cnt = 0;
 BtKey ptr;
 
 #ifdef unix
-	if( *(uint *)(bt->latchmgr->lock) )
+	if( *(ushort *)(bt->latchmgr->lock) )
 		fprintf(stderr, "Alloc page locked\n");
-	*(uint *)(bt->latchmgr->lock) = 0;
+	*(ushort *)(bt->latchmgr->lock) = 0;
 
-	for( idx = 1; idx < bt->latchmgr->latchdeployed; idx++ ) {
+	for( idx = 1; idx <= bt->latchmgr->latchdeployed; idx++ ) {
 		latch = bt->latchsets + idx;
-		if( *(uint *)latch->readwr )
+		if( *(ushort *)latch->readwr )
 			fprintf(stderr, "latchset %d rwlocked for page %.8x\n", idx, latch->page_no);
-		*(uint *)latch->readwr = 0;
+		*(ushort *)latch->readwr = 0;
 
-		if( *(uint *)latch->access )
+		if( *(ushort *)latch->access )
 			fprintf(stderr, "latchset %d accesslocked for page %.8x\n", idx, latch->page_no);
-		*(uint *)latch->access = 0;
+		*(ushort *)latch->access = 0;
 
-		if( *(uint *)latch->parent )
+		if( *(ushort *)latch->parent )
 			fprintf(stderr, "latchset %d parentlocked for page %.8x\n", idx, latch->page_no);
-		*(uint *)latch->parent = 0;
+		*(ushort *)latch->parent = 0;
 
 		if( latch->pin ) {
 			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no);
@@ -2113,16 +2158,16 @@ BtKey ptr;
 	}
 
 	for( hashidx = 0; hashidx < bt->latchmgr->latchhash; hashidx++ ) {
-	  if( *(uint *)(bt->latchmgr->table[hashidx].latch) )
+	  if( *(ushort *)(bt->latchmgr->table[hashidx].latch) )
 			fprintf(stderr, "hash entry %d locked\n", hashidx);
 
-	  *(uint *)(bt->latchmgr->table[hashidx].latch) = 0;
+	  *(ushort *)(bt->latchmgr->table[hashidx].latch) = 0;
 
 	  if( idx = bt->latchmgr->table[hashidx].slot ) do {
 		latch = bt->latchsets + idx;
-		if( *(uint *)latch->busy )
+		if( *(ushort *)latch->busy )
 			fprintf(stderr, "latchset %d busylocked for page %.8x\n", idx, latch->page_no);
-		*(uint *)latch->busy = 0;
+		*(ushort *)latch->busy = 0;
 		if( latch->hash != hashidx )
 			fprintf(stderr, "latchset %d wrong hashidx\n", idx);
 		if( latch->pin )
@@ -2343,7 +2388,7 @@ FILE *in;
 	case 'c':
 	  cnt = 0;
 
-	  fprintf(stderr, "started reading\n");
+	  fprintf(stderr, "started counting\n");
 
 	  next = bt->latchmgr->nlatchpage + LATCH_page;
 	  page_no = LEAF_page;
@@ -2358,10 +2403,10 @@ FILE *in;
 	  	SetFilePointer (bt->idx, (long)off, (long*)(&off)+1, FILE_BEGIN);
 
 	  	if( !ReadFile(bt->idx, bt->frame, bt->page_size, amt, NULL))
-			return bt->err = BTERR_map;
+			fprintf (stderr, "unable to read page %.8x", page_no);
 
 	  	if( *amt <  bt->page_size )
-			return bt->err = BTERR_map;
+			fprintf (stderr, "unable to read page %.8x", page_no);
 #endif
 		if( !bt->frame->free && !bt->frame->lvl )
 			cnt += bt->frame->act;
