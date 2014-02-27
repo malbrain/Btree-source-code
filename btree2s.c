@@ -1844,6 +1844,7 @@ time_t tod[1];
 uint scan = 0;
 uint len = 0;
 uint map = 0;
+uid page_no;
 BtKey ptr;
 BtDb *bt;
 FILE *in;
@@ -1946,9 +1947,55 @@ FILE *in;
 		break;
 
 	case 's':
-		scan++;
-		break;
+		cnt = len = key[0] = 0;
 
+		if( slot = bt_startkey (bt, key, len) )
+		  slot--;
+		else
+		  fprintf(stderr, "Error %d in StartKey. Syserror: %d\n", bt->err, errno), exit(0);
+
+		while( slot = bt_nextkey (bt, slot) ) {
+			ptr = bt_key(bt, slot);
+			fwrite (ptr->key, ptr->len, 1, stdout);
+			fputc ('\n', stdout);
+			cnt++;
+	  	}
+
+	  fprintf(stderr, " Total keys read %d\n", cnt - 1);
+	  break;
+
+	case 'c':
+	  fprintf(stderr, "started counting\n");
+	  cnt = 0;
+
+	  page_no = LEAF_page;
+	  cnt = 0;
+
+	  while( 1 ) {
+	  uid off = page_no << bt->page_bits;
+#ifdef unix
+	  	if( !pread (bt->idx, bt->frame, bt->page_size, off) )
+			break;
+#else
+		DWORD amt[1];
+
+	  	SetFilePointer (bt->idx, (long)off, (long*)(&off)+1, FILE_BEGIN);
+
+	  	if( !ReadFile(bt->idx, bt->frame, bt->page_size, amt, NULL))
+			break;
+
+	  	if( *amt <  bt->page_size )
+			fprintf (stderr, "unable to read page %.8x", page_no);
+#endif
+		if( !bt->frame->free && !bt->frame->lvl )
+			cnt += bt->frame->act;
+
+		page_no++;
+	  }
+		
+	  cnt--;	// remove stopper key
+	  fprintf(stderr, " Total keys read %d\n", cnt);
+	  break;
 	}
 
 	done = getCpuTime(0);
@@ -1959,24 +2006,6 @@ FILE *in;
 	elapsed = getCpuTime(2);
 	fprintf(stderr, " sys  %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
 
-	dead = cnt = 0;
-	len = key[0] = 0;
-
-	fprintf(stderr, "started reading\n");
-
-	if( slot = bt_startkey (bt, key, len) )
-	  slot--;
-	else
-	  fprintf(stderr, "Error %d in StartKey. Syserror: %d\n", bt->err, errno), exit(0);
-
-	while( slot = bt_nextkey (bt, slot) )
-	  if( cnt++, scan ) {
-			ptr = bt_key(bt, slot);
-			fwrite (ptr->key, ptr->len, 1, stdout);
-			fputc ('\n', stdout);
-	  }
-
-	fprintf(stderr, " Total keys read %d\n", cnt);
 	return 0;
 }
 

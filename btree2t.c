@@ -2383,15 +2383,30 @@ FILE *in;
 		break;
 
 	case 's':
-		scan++;
+		fprintf(stderr, "started scaning\n");
+		cnt = len = key[0] = 0;
+
+		if( slot = bt_startkey (bt, key, len) )
+		  slot--;
+		else
+		  fprintf(stderr, "Error %d in StartKey. Syserror: %d\n", bt->err, errno), exit(0);
+
+		while( slot = bt_nextkey (bt, slot) ) {
+			ptr = bt_key(bt, slot);
+			fwrite (ptr->key, ptr->len, 1, stdout);
+			fputc ('\n', stdout);
+			cnt++;
+	  	}
+
+		fprintf(stderr, " Total keys read %d\n", cnt - 1);
+		break;
 
 	case 'c':
-	  cnt = 0;
-
 	  fprintf(stderr, "started counting\n");
 
 	  next = bt->latchmgr->nlatchpage + LATCH_page;
 	  page_no = LEAF_page;
+	  cnt = 0;
 
 	  while( page_no < bt_getid(bt->latchmgr->alloc->right) ) {
 	  uid off = page_no << bt->page_bits;
