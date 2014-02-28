@@ -473,8 +473,10 @@ BTERR bt_readpage (BtDb *bt, BtPage page, uid page_no)
 off64_t off = page_no << bt->page_bits;
 
 #ifdef unix
-	if( pread (bt->idx, page, bt->page_size, page_no << bt->page_bits) < bt->page_size )
+	if( pread (bt->idx, page, bt->page_size, page_no << bt->page_bits) < bt->page_size ) {
+		fprintf (stderr, "Unable to read page %.8x errno = %d\n", page_no, errno);
 		return bt->err = BTERR_read;
+	}
 #else
 OVERLAPPED ovl[1];
 uint amt[1];
@@ -483,10 +485,14 @@ uint amt[1];
 	ovl->Offset = off;
 	ovl->OffsetHigh = off >> 32;
 
-	if( !ReadFile(bt->idx, page, bt->page_size, amt, ovl))
+	if( !ReadFile(bt->idx, page, bt->page_size, amt, ovl)) {
+		fprintf (stderr, "Unable to read page %.8x GetLastError = %d\n", page_no, GetLastError());
 		return bt->err = BTERR_read;
-	if( *amt <  bt->page_size )
+	}
+	if( *amt <  bt->page_size ) {
+		fprintf (stderr, "Unable to read page %.8x GetLastError = %d\n", page_no, GetLastError());
 		return bt->err = BTERR_read;
+	}
 #endif
 	return 0;
 }
@@ -525,7 +531,7 @@ uint amt[1];
 
 BTERR bt_latchlink (BtDb *bt, uint hashidx, uint slot, uid page_no)
 {
-BtPage page = (BtPage)(slot * bt->page_size + bt->pagepool);
+BtPage page = (BtPage)((uid)slot * bt->page_size + bt->pagepool);
 BtLatchSet *latch = bt->latchsets + slot;
 
 	if( latch->next = bt->table[hashidx].slot )
@@ -656,7 +662,7 @@ BtPage page;
 
 	//  update permanent page area in btree
 
-	page = (BtPage)(slot * bt->page_size + bt->pagepool);
+	page = (BtPage)((uid)slot * bt->page_size + bt->pagepool);
 
 	if( page->dirty )
 	  if( bt_writepage (bt, page, latch->page_no) )
@@ -908,21 +914,21 @@ btlatch:
 		fprintf (stderr, "Unable to mmap page zero, errno = %d", errno);
 		return bt_close (bt), NULL;
 	}
-	bt->table = (void *)mmap (0, nlatchpage * bt->page_size, flag, MAP_SHARED, bt->idx, LATCH_page * bt->page_size);
+	bt->table = (void *)mmap (0, (uid)nlatchpage * bt->page_size, flag, MAP_SHARED, bt->idx, LATCH_page * bt->page_size);
 	if( bt->table == MAP_FAILED ) {
 		fprintf (stderr, "Unable to mmap buffer pool, errno = %d", errno);
 		return bt_close (bt), NULL;
 	}
 #else
 	flag = PAGE_READWRITE;
-	bt->halloc = CreateFileMapping(bt->idx, NULL, flag, 0, (nlatchpage + LATCH_page) * bt->page_size, NULL);
+	bt->halloc = CreateFileMapping(bt->idx, NULL, flag, 0, ((uid)nlatchpage + LATCH_page) * bt->page_size, NULL);
 	if( !bt->halloc ) {
 		fprintf (stderr, "Unable to create file mapping for buffer pool mgr, GetLastError = %d\n", GetLastError());
 		return bt_close (bt), NULL;
 	}
 
 	flag = FILE_MAP_WRITE;
-	bt->latchmgr = MapViewOfFile(bt->halloc, flag, 0, 0, (nlatchpage + LATCH_page) * bt->page_size);
+	bt->latchmgr = MapViewOfFile(bt->halloc, flag, 0, 0, ((uid)nlatchpage + LATCH_page) * bt->page_size);
 	if( !bt->latchmgr ) {
 		fprintf (stderr, "Unable to map buffer pool, GetLastError = %d\n", GetLastError());
 		return bt_close (bt), NULL;
@@ -930,8 +936,8 @@ btlatch:
 
 	bt->table = (void *)((char *)bt->latchmgr + LATCH_page * bt->page_size);
 #endif
-	bt->pagepool = (unsigned char *)bt->table + (nlatchpage - bt->latchmgr->latchtotal) * bt->page_size;
-	bt->latchsets = (BtLatchSet *)(bt->pagepool - bt->latchmgr->latchtotal * sizeof(BtLatchSet));
+	bt->pagepool = (unsigned char *)bt->table + (uid)(nlatchpage - bt->latchmgr->latchtotal) * bt->page_size;
+	bt->latchsets = (BtLatchSet *)(bt->pagepool - (uid)bt->latchmgr->latchtotal * sizeof(BtLatchSet));
 
 #ifdef unix
 	bt->mem = malloc (2 * bt->page_size);
@@ -1057,7 +1063,7 @@ void bt_update (BtDb *bt, BtPage page)
 {
 #ifdef unix
 	msync (page, bt->page_size, MS_ASYNC);
-//#else
+#else
 //	FlushViewOfFile (page, bt->page_size);
 #endif
 	page->dirty = 1;
@@ -1067,7 +1073,7 @@ void bt_update (BtDb *bt, BtPage page)
 
 BtPage bt_mappage (BtDb *bt, BtLatchSet *latch)
 {
-	return (BtPage)((latch - bt->latchsets) * bt->page_size + bt->pagepool);
+	return (BtPage)((uid)(latch - bt->latchsets) * bt->page_size + bt->pagepool);
 }
 
 //	deallocate a deleted page 
@@ -1882,7 +1888,6 @@ BtPage page;
 uint amt[1];
 BtKey ptr;
 
-#ifdef unix
 	if( *(ushort *)(bt->latchmgr->lock) )
 		fprintf(stderr, "Alloc page locked\n");
 	*(ushort *)(bt->latchmgr->lock) = 0;
@@ -1905,7 +1910,7 @@ BtKey ptr;
 			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no);
 			latch->pin = 0;
 		}
-		page = (BtPage)(idx * bt->page_size + bt->pagepool);
+		page = (BtPage)((uid)idx * bt->page_size + bt->pagepool);
 
 	    if( page->dirty )
 	  	 if( bt_writepage (bt, page, latch->page_no) )
@@ -1929,7 +1934,8 @@ BtKey ptr;
 	page_no = LEAF_page;
 
 	while( page_no < bt_getid(bt->latchmgr->alloc->right) ) {
-		pread (bt->idx, bt->frame, bt->page_size, page_no << bt->page_bits);
+		if( bt_readpage (bt, bt->frame, page_no) )
+		  fprintf(stderr, "page %.8x unreadable\n", page_no);
 		if( !bt->frame->free ) {
 		 for( idx = 0; idx++ < bt->frame->cnt - 1; ) {
 		  ptr = keyptr(bt->frame, idx+1);
@@ -1945,9 +1951,6 @@ BtKey ptr;
 		page_no = next;
 	}
 	return cnt - 1;
-#else
-	return 0;
-#endif
 }
 
 #ifndef unix
