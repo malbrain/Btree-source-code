@@ -171,7 +171,6 @@ typedef struct BtPage_ {
 //	The memory mapping pool table buffer manager entry
 
 typedef struct {
-	unsigned long long int lru;	// number of times accessed
 	uid  basepage;				// mapped base page number
 	char *map;					// mapped memory pointer
 	ushort slot;				// slot index in this array
@@ -182,6 +181,8 @@ typedef struct {
 	HANDLE hmap;				// Windows memory mapping handle
 #endif
 } BtPool;
+
+#define CLOCK_bit 0x8000		// bit in pool->pin
 
 //  The loadpage interface object
 
@@ -1027,7 +1028,7 @@ uint slot;
 
 	pool->hashprev = pool->hashnext = NULL;
 	pool->basepage = page_no & ~bt->mgr->poolmask;
-	pool->lru = 1;
+	pool->pin = CLOCK_bit + 1;
 
 	if( slot = bt->mgr->hash[idx] ) {
 		node = bt->mgr->pool + slot;
@@ -1036,32 +1037,6 @@ uint slot;
 	}
 
 	bt->mgr->hash[idx] = pool->slot;
-}
-
-//	find best segment to evict from buffer pool
-
-BtPool *bt_findlru (BtDb *bt, uint hashslot)
-{
-unsigned long long int target = ~0LL;
-BtPool *pool = NULL, *node;
-
-	if( !hashslot )
-		return NULL;
-
-	node = bt->mgr->pool + hashslot;
-
-	//  scan pool entries under hash table slot
-
-	do {
-	  if( node->pin )
-		continue;
-	  if( node->lru > target )
-		continue;
-	  target = node->lru;
-	  pool = node;
-	} while( node = node->hashnext );
-
-	return pool;
 }
 
 //  map new buffer pool segment to virtual memory
@@ -1119,42 +1094,25 @@ void bt_unpinpool (BtPool *pool)
 
 BtPool *bt_pinpool(BtDb *bt, uid page_no)
 {
+uint slot, hashidx, idx, victim;
 BtPool *pool, *node, *next;
-uint slot, idx, victim;
 
 	//	lock hash table chain
 
-	idx = (uint)(page_no >> bt->mgr->seg_bits) % bt->mgr->hashsize;
-	bt_spinreadlock (&bt->mgr->latch[idx]);
+	hashidx = (uint)(page_no >> bt->mgr->seg_bits) % bt->mgr->hashsize;
+	bt_spinwritelock (&bt->mgr->latch[hashidx]);
 
 	//	look up in hash table
 
-	if( pool = bt_findpool(bt, page_no, idx) ) {
+	if( pool = bt_findpool(bt, page_no, hashidx) ) {
 #ifdef unix
+		__sync_fetch_and_or(&pool->pin, CLOCK_bit);
 		__sync_fetch_and_add(&pool->pin, 1);
 #else
+		_InterlockedOr16 (&pool->pin, CLOCK_bit);
 		_InterlockedIncrement16 (&pool->pin);
 #endif
-		bt_spinreleaseread (&bt->mgr->latch[idx]);
-		pool->lru++;
-		return pool;
-	}
-
-	//	upgrade to write lock
-
-	bt_spinreleaseread (&bt->mgr->latch[idx]);
-	bt_spinwritelock (&bt->mgr->latch[idx]);
-
-	// try to find page in pool with write lock
-
-	if( pool = bt_findpool(bt, page_no, idx) ) {
-#ifdef unix
-		__sync_fetch_and_add(&pool->pin, 1);
-#else
-		_InterlockedIncrement16 (&pool->pin);
-#endif
-		bt_spinreleasewrite (&bt->mgr->latch[idx]);
-		pool->lru++;
+		bt_spinreleasewrite (&bt->mgr->latch[hashidx]);
 		return pool;
 	}
 
@@ -1174,13 +1132,8 @@ uint slot, idx, victim;
 		if( bt_mapsegment(bt, pool, page_no) )
 			return NULL;
 
-		bt_linkhash(bt, pool, page_no, idx);
-#ifdef unix
-		__sync_fetch_and_add(&pool->pin, 1);
-#else
-		_InterlockedIncrement16 (&pool->pin);
-#endif
-		bt_spinreleasewrite (&bt->mgr->latch[idx]);
+		bt_linkhash(bt, pool, page_no, hashidx);
+		bt_spinreleasewrite (&bt->mgr->latch[hashidx]);
 		return pool;
 	}
 
@@ -1199,20 +1152,30 @@ uint slot, idx, victim;
 #else
 		victim = _InterlockedIncrement (&bt->mgr->evicted) - 1;
 #endif
-		victim %= bt->mgr->hashsize;
+		victim %= bt->mgr->poolmax;
+		pool = bt->mgr->pool + victim;
+		idx = (uint)(pool->basepage >> bt->mgr->seg_bits) % bt->mgr->hashsize;
+
+		if( !victim )
+			continue;
 
 		// try to get write lock
 		//	skip entry if not obtained
 
-		if( !bt_spinwritetry (&bt->mgr->latch[victim]) )
+		if( !bt_spinwritetry (&bt->mgr->latch[idx]) )
 			continue;
 
-		//  if pool entry is empty
-		//	or any pages are pinned
-		//	skip this entry
+		//	skip this entry if
+		//	page is pinned
+		//  or clock bit is set
 
-		if( !(pool = bt_findlru(bt, bt->mgr->hash[victim])) ) {
-			bt_spinreleasewrite (&bt->mgr->latch[victim]);
+		if( pool->pin ) {
+#ifdef unix
+			__sync_fetch_and_and(&pool->pin, ~CLOCK_bit);
+#else
+			_InterlockedAnd16 (&pool->pin, ~CLOCK_bit);
+#endif
+			bt_spinreleasewrite (&bt->mgr->latch[idx]);
 			continue;
 		}
 
@@ -1221,14 +1184,14 @@ uint slot, idx, victim;
 		if( node = pool->hashprev )
 			node->hashnext = pool->hashnext;
 		else if( node = pool->hashnext )
-			bt->mgr->hash[victim] = node->slot;
+			bt->mgr->hash[idx] = node->slot;
 		else
-			bt->mgr->hash[victim] = 0;
+			bt->mgr->hash[idx] = 0;
 
 		if( node = pool->hashnext )
 			node->hashprev = pool->hashprev;
 
-		bt_spinreleasewrite (&bt->mgr->latch[victim]);
+		bt_spinreleasewrite (&bt->mgr->latch[idx]);
 
 		//	remove old file mapping
 #ifdef unix
@@ -1246,13 +1209,8 @@ uint slot, idx, victim;
 		if( bt_mapsegment(bt, pool, page_no) )
 			return NULL;
 
-		bt_linkhash(bt, pool, page_no, idx);
-#ifdef unix
-		__sync_fetch_and_add(&pool->pin, 1);
-#else
-		_InterlockedIncrement16 (&pool->pin);
-#endif
-		bt_spinreleasewrite (&bt->mgr->latch[idx]);
+		bt_linkhash(bt, pool, page_no, hashidx);
+		bt_spinreleasewrite (&bt->mgr->latch[hashidx]);
 		return pool;
 	}
 }
@@ -2210,7 +2168,7 @@ BtKey ptr;
 		fprintf(stderr, "Alloc page locked\n");
 	*(uint *)(bt->mgr->latchmgr->lock) = 0;
 
-	for( idx = 1; idx < bt->mgr->latchmgr->latchdeployed; idx++ ) {
+	for( idx = 1; idx <= bt->mgr->latchmgr->latchdeployed; idx++ ) {
 		latch = bt->mgr->latchsets + idx;
 		if( *(uint *)latch->readwr )
 			fprintf(stderr, "latchset %d rwlocked for page %.8x\n", idx, latch->page_no);
@@ -2367,8 +2325,6 @@ FILE *in;
 				found++;
 			  else if( bt->err )
 				fprintf(stderr, "Error %d Syserr %d Line: %d\n", bt->err, errno, line), exit(0);
-			  else
-				fprintf(stderr, "Unable to find key %.*s line %d\n", len, key, line);
 			  len = 0;
 			}
 			else if( len < 255 )
