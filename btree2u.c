@@ -66,6 +66,17 @@ typedef unsigned int		uint;
 #define BT_minpage		(1 << BT_minbits)	// minimum page size
 #define BT_maxpage		(1 << BT_maxbits)	// maximum page size
 
+//  BTree page number constants
+#define ALLOC_page		0
+#define ROOT_page		1
+#define LEAF_page		2
+#define LATCH_page		3
+
+//	Number of levels to create in a new BTree
+
+#define MIN_lvl			2
+#define MAX_lvl			15
+
 /*
 There are five lock types for each node in three independent sets: 
 1. (set 1) AccessIntent: Sharable. Going to Read the node. Incompatible with NodeDelete. 
@@ -149,11 +160,13 @@ typedef struct BtPage_ {
 typedef struct {
 	struct BtPage_ alloc[2];	// next & free page_nos in right ptr
 	BtSpinLatch lock[1];		// allocation area lite latch
-	uint latchdeployed;			// highest number of latch entries deployed
-	uint nlatchpage;			// number of latch pages at BT_latch
-	uint latchtotal;			// number of page latch entries
-	uint latchhash;				// number of latch hash table slots
-	uint latchvictim;			// next latch hash entry to examine
+	volatile uint latchdeployed;// highest number of latch entries deployed
+	volatile uint nlatchpage;	// number of latch pages at BT_latch
+	volatile uint latchtotal;	// number of page latch entries
+	volatile uint latchhash;	// number of latch hash table slots
+	volatile uint latchvictim;	// next latch hash entry to examine
+	volatile uint safelevel;	// safe page level in cache
+	volatile uint cache[MAX_lvl];// cache census counts by btree level
 } BtLatchMgr;
 
 //  latch hash table entries
@@ -170,11 +183,16 @@ typedef struct {
 	BtSpinLatch readwr[1];		// read/write page lock
 	BtSpinLatch access[1];		// Access Intent/Page delete
 	BtSpinLatch parent[1];		// Posting of fence key in parent
-	volatile ushort clock;		// accessed since last clock pass
+	volatile ushort pin;		// number of pins/level/clock bits
 	volatile uint next;			// next entry in hash table chain
 	volatile uint prev;			// prev entry in hash table chain
-	volatile uint pin;			// number of outstanding pins
 } BtLatchSet;
+
+#define CLOCK_mask 0xe000
+#define CLOCK_unit 0x2000
+#define PIN_mask 0x07ff
+#define LVL_mask 0x1800
+#define LVL_shift 11
 
 //	The object structure for Btree access
 
@@ -236,16 +254,6 @@ extern uid bt_uid (BtDb *bt, uint slot);
 #ifdef USETOD
 extern uint bt_tod (BtDb *bt, uint slot);
 #endif
-
-//  BTree page number constants
-#define ALLOC_page		0
-#define ROOT_page		1
-#define LEAF_page		2
-#define LATCH_page		3
-
-//	Number of levels to create in a new BTree
-
-#define MIN_lvl			2
 
 //  The page is allocated from low and hi ends.
 //  The key offsets and row-id's are allocated
@@ -535,17 +543,31 @@ BTERR bt_latchlink (BtDb *bt, uint hashidx, uint slot, uid page_no)
 {
 BtPage page = (BtPage)((uid)slot * bt->page_size + bt->pagepool);
 BtLatchSet *latch = bt->latchsets + slot;
+int lvl;
 
 	if( latch->next = bt->table[hashidx].slot )
 		bt->latchsets[latch->next].prev = slot;
 
 	bt->table[hashidx].slot = slot;
 	latch->page_no = page_no;
-	latch->clock = 1;
 	latch->prev = 0;
 	latch->pin = 1;
 
-	return bt_readpage (bt, page, page_no);
+	if( bt_readpage (bt, page, page_no) )
+		return bt->err;
+
+	lvl = page->lvl << LVL_shift;
+	if( lvl > LVL_mask )
+		lvl = LVL_mask;
+	latch->pin |= lvl;		// store lvl
+	latch->pin |= lvl << 3; // initialize clock
+
+#ifdef unix
+	__sync_fetch_and_add (&bt->latchmgr->cache[page->lvl], 1);
+#else
+	_InterlockedAdd(&bt->latchmgr->cache[page->lvl], 1);
+#endif
+	return bt->err = 0;
 }
 
 //	release latch pin
@@ -555,7 +577,7 @@ void bt_unpinlatch (BtLatchSet *latch)
 #ifdef unix
 	__sync_fetch_and_add(&latch->pin, -1);
 #else
-	_InterlockedDecrement (&latch->pin);
+	_InterlockedDecrement16 (&latch->pin);
 #endif
 }
 
@@ -567,6 +589,7 @@ BtLatchSet *bt_pinlatch (BtDb *bt, uid page_no)
 uint hashidx = page_no % bt->latchmgr->latchhash;
 BtLatchSet *latch;
 uint slot, idx;
+uint lvl, cnt;
 off64_t off;
 uint amt[1];
 BtPage page;
@@ -583,11 +606,20 @@ BtPage page;
   } while( slot = latch->next );
 
   //  found our entry
+  //  increment clock
 
   if( slot ) {
 	latch = bt->latchsets + slot;
-	latch->clock = 1;
-	latch->pin++;
+	lvl = (latch->pin & LVL_mask) >> LVL_shift;
+	lvl *= CLOCK_unit * 2;
+	lvl |= CLOCK_unit;
+#ifdef unix
+	__sync_fetch_and_add(&latch->pin, 1);
+	__sync_fetch_and_or(&latch->pin, lvl);
+#else
+	_InterlockedIncrement16 (&latch->pin);
+	_InterlockedOr16 (&latch->pin, lvl);
+#endif
 	bt_spinreleasewrite(bt->table[hashidx].latch);
 	return latch;
   }
@@ -625,20 +657,44 @@ BtPage page;
 	//	or has outstanding pins
 
 	slot %= bt->latchmgr->latchtotal;
+
+	//	on slot wraparound, check census
+	//	count and increment safe level
+
+	cnt = bt->latchmgr->cache[bt->latchmgr->safelevel];
+
+	if( !slot ) {
+	  if( cnt < bt->latchmgr->latchtotal / 10 )
+#ifdef unix
+		__sync_fetch_and_add(&bt->latchmgr->safelevel, 1);
+#else
+		_InterlockedIncrement (&bt->latchmgr->safelevel);
+#endif
+fprintf(stderr, "X");
+		continue;
+	}
+
 	latch = bt->latchsets + slot;
-
 	idx = latch->page_no % bt->latchmgr->latchhash;
+	lvl = (latch->pin & LVL_mask) >> LVL_shift;
 
-	if( !slot )
+	//	see if we are evicting this level yet
+
+	if( lvl > bt->latchmgr->safelevel )
 		continue;
 
 	if( !bt_spinwritetry (bt->table[idx].latch) )
 		continue;
 
-	if( latch->clock ) {
-		latch->clock = 0;
-		bt_spinreleasewrite (bt->table[idx].latch);
-		continue;
+	if( latch->pin & ~LVL_mask ) {
+	  if( latch->pin & CLOCK_mask )
+#ifdef unix
+		__sync_fetch_and_add(&latch->pin, -CLOCK_unit);
+#else
+		_InterlockedExchangeAdd16 (&latch->pin, -CLOCK_unit);
+#endif
+	  bt_spinreleasewrite (bt->table[idx].latch);
+	  continue;
 	}
 
 	//  update permanent page area in btree
@@ -646,6 +702,11 @@ BtPage page;
 	page = (BtPage)((uid)slot * bt->page_size + bt->pagepool);
 #ifdef unix
 	posix_fadvise (bt->idx, page_no << bt->page_bits, bt->page_size, POSIX_FADV_WILLNEED);
+if(page->lvl > 0 )
+fprintf(stderr, "%d", page->lvl);
+	__sync_fetch_and_add (&bt->latchmgr->cache[page->lvl], -1);
+#else
+	_InterlockedAdd(&bt->latchmgr->cache[page->lvl], -1);
 #endif
 	if( page->dirty )
 	  if( bt_writepage (bt, page, latch->page_no) )
@@ -1046,7 +1107,7 @@ int ans;
 void bt_update (BtDb *bt, BtPage page)
 {
 #ifdef unix
-//	msync (page, bt->page_size, MS_ASYNC);
+	msync (page, bt->page_size, MS_ASYNC);
 #else
 //	FlushViewOfFile (page, bt->page_size);
 #endif
@@ -1873,11 +1934,14 @@ BtPage page;
 uint amt[1];
 BtKey ptr;
 
-	memset (blks, 0, sizeof(blks));
-
+#ifdef unix
+	posix_fadvise( bt->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
 	if( *(ushort *)(bt->latchmgr->lock) )
 		fprintf(stderr, "Alloc page locked\n");
 	*(ushort *)(bt->latchmgr->lock) = 0;
+
+	memset (blks, 0, sizeof(blks));
 
 	for( idx = 1; idx <= bt->latchmgr->latchdeployed; idx++ ) {
 		latch = bt->latchsets + idx;
@@ -1893,29 +1957,29 @@ BtKey ptr;
 			fprintf(stderr, "latchset %d parentlocked for page %.8x\n", idx, latch->page_no);
 		*(ushort *)latch->parent = 0;
 
-		if( latch->pin ) {
+		if( latch->pin & PIN_mask ) {
 			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no);
 			latch->pin = 0;
 		}
 		page = (BtPage)((uid)idx * bt->page_size + bt->pagepool);
+		blks[page->lvl]++;
 
 	    if( page->dirty )
 	  	 if( bt_writepage (bt, page, latch->page_no) )
 		  	fprintf(stderr, "Page %.8x Write Error\n", latch->page_no);
 	}
 
+	for( idx = 0; blks[idx]; idx++ )
+		fprintf(stderr, "cache: %d lvl %d blocks\n", blks[idx], idx);
+
 	for( hashidx = 0; hashidx < bt->latchmgr->latchhash; hashidx++ ) {
 	  if( *(ushort *)(bt->table[hashidx].latch) )
 			fprintf(stderr, "hash entry %d locked\n", hashidx);
 
 	  *(ushort *)(bt->table[hashidx].latch) = 0;
-
-	  if( idx = bt->table[hashidx].slot ) do {
-		latch = bt->latchsets + idx;
-		if( latch->pin )
-			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no);
-	  } while( idx = latch->next );
 	}
+
+	memset (blks, 0, sizeof(blks));
 
 	next = bt->latchmgr->nlatchpage + LATCH_page;
 	page_no = LEAF_page;
@@ -1938,8 +2002,10 @@ BtKey ptr;
 			next = page_no + 1;
 		page_no = next;
 	}
+
 	for( idx = 0; blks[idx]; idx++ )
-		fprintf(stderr, "%d lvl %d blocks\n", blks[idx], idx);
+		fprintf(stderr, "btree: %d lvl %d blocks\n", blks[idx], idx);
+
 	return cnt - 1;
 }
 
