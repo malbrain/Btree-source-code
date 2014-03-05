@@ -670,8 +670,7 @@ BtPage page;
 #else
 		_InterlockedIncrement (&bt->latchmgr->safelevel);
 #endif
-fprintf(stderr, "X");
-		continue;
+	  continue;
 	}
 
 	latch = bt->latchsets + slot;
@@ -702,8 +701,6 @@ fprintf(stderr, "X");
 	page = (BtPage)((uid)slot * bt->page_size + bt->pagepool);
 #ifdef unix
 	posix_fadvise (bt->idx, page_no << bt->page_bits, bt->page_size, POSIX_FADV_WILLNEED);
-if(page->lvl > 0 )
-fprintf(stderr, "%d", page->lvl);
 	__sync_fetch_and_add (&bt->latchmgr->cache[page->lvl], -1);
 #else
 	_InterlockedAdd(&bt->latchmgr->cache[page->lvl], -1);
