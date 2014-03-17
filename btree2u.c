@@ -1,6 +1,7 @@
-// btree version 2u
+// btree version 2u  sched_yield locks
 //	with combined latch & pool manager
-// 26 FEB 2014
+//	and phase-fair reader writer lock
+// 12 MAR 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -96,16 +97,28 @@ typedef enum{
 
 //	definition for latch implementation
 
-// exclusive is set for write access
-// share is count of read accessors
-// grant write lock when share == 0
+volatile typedef struct {
+	ushort lock[1];
+} BtSpinLatch;
+
+#define XCL 1
+#define PEND 2
+#define BOTH 3
+#define SHARE 4
 
 volatile typedef struct {
-	unsigned char mutex[1];
-	unsigned char exclusive:1;
-	unsigned char pending:1;
-	ushort share;
-} BtSpinLatch;
+	ushort rin[1];		// readers in count
+	ushort rout[1];		// readers out count
+	ushort serving[1];	// writers out count
+	ushort ticket[1];	// writers in count
+} RWLock;
+
+//	define bits at bottom of rin
+
+#define PHID 0x1	// writer phase (0/1)
+#define PRES 0x2	// writer present
+#define MASK 0x3	// both write bits
+#define RINC 0x4	// reader increment
 
 //	Define the length of the page and key pointers
 
@@ -179,13 +192,13 @@ typedef struct {
 //	latch manager table structure
 
 typedef struct {
-	volatile uid page_no;		// latch set page number on disk
-	BtSpinLatch readwr[1];		// read/write page lock
-	BtSpinLatch access[1];		// Access Intent/Page delete
-	BtSpinLatch parent[1];		// Posting of fence key in parent
-	volatile ushort pin;		// number of pins/level/clock bits
-	volatile uint next;			// next entry in hash table chain
-	volatile uint prev;			// prev entry in hash table chain
+	volatile uid page_no;	// latch set page number on disk
+	RWLock readwr[1];		// read/write page lock
+	RWLock access[1];		// Access Intent/Page delete
+	RWLock parent[1];		// Posting of fence key in parent
+	volatile ushort pin;	// number of pins/level/clock bits
+	volatile uint next;		// next entry in hash table chain
+	volatile uint prev;		// prev entry in hash table chain
 } BtLatchSet;
 
 #define CLOCK_mask 0xe000
@@ -338,7 +351,77 @@ BtKey ptr;
 	return bt->err = err;
 }
 
-//	Latch Manager
+//	Phase-Fair reader/writer lock implementation
+
+void WriteLock (RWLock *lock)
+{
+ushort w, r, tix;
+
+#ifdef unix
+	tix = __sync_fetch_and_add (lock->ticket, 1);
+#else
+	tix = _InterlockedExchangeAdd16 (lock->ticket, 1);
+#endif
+	// wait for our ticket to come up
+
+	while( tix != lock->serving[0] )
+#ifdef unix
+		sched_yield();
+#else
+		SwitchToThread ();
+#endif
+
+	w = PRES | (tix & PHID);
+#ifdef  unix
+	r = __sync_fetch_and_add (lock->rin, w);
+#else
+	r = _InterlockedExchangeAdd16 (lock->rin, w);
+#endif
+	while( r != *lock->rout )
+#ifdef unix
+		sched_yield();
+#else
+		SwitchToThread();
+#endif
+}
+
+void WriteRelease (RWLock *lock)
+{
+#ifdef unix
+	__sync_fetch_and_and (lock->rin, ~MASK);
+#else
+	_InterlockedAnd16 (lock->rin, ~MASK);
+#endif
+	lock->serving[0]++;
+}
+
+void ReadLock (RWLock *lock)
+{
+ushort w;
+#ifdef unix
+	w = __sync_fetch_and_add (lock->rin, RINC) & MASK;
+#else
+	w = _InterlockedExchangeAdd16 (lock->rin, RINC) & MASK;
+#endif
+	if( w )
+	  while( w == (*lock->rin & MASK) )
+#ifdef unix
+		sched_yield ();
+#else
+		SwitchToThread ();
+#endif
+}
+
+void ReadRelease (RWLock *lock)
+{
+#ifdef unix
+	__sync_fetch_and_add (lock->rout, RINC);
+#else
+	_InterlockedExchangeAdd16 (lock->rout, RINC);
+#endif
+}
+
+//	Spin Latch Manager
 
 //	wait until write lock mode is clear
 //	and add 1 to the share count
@@ -348,28 +431,20 @@ void bt_spinreadlock(BtSpinLatch *latch)
 ushort prev;
 
   do {
-	//	obtain latch mutex
 #ifdef unix
-	if( __sync_lock_test_and_set(latch->mutex, 1) )
-		continue;
+	prev = __sync_fetch_and_add (latch->lock, SHARE);
 #else
-	if( _InterlockedExchange8(latch->mutex, 1) )
-		continue;
+	prev = _InterlockedExchangeAdd16(latch->lock, SHARE);
 #endif
 	//  see if exclusive request is granted or pending
 
-	if( prev = !(latch->exclusive | latch->pending) )
-		latch->share++;
-
-#ifdef unix
-	*latch->mutex = 0;
-#else
-	_InterlockedExchange8(latch->mutex, 0);
-#endif
-
-	if( prev )
+	if( !(prev & BOTH) )
 		return;
-
+#ifdef unix
+	prev = __sync_fetch_and_add (latch->lock, -SHARE);
+#else
+	prev = _InterlockedExchangeAdd16(latch->lock, -SHARE);
+#endif
 #ifdef  unix
   } while( sched_yield(), 1 );
 #else
@@ -381,27 +456,23 @@ ushort prev;
 
 void bt_spinwritelock(BtSpinLatch *latch)
 {
-uint prev;
+ushort prev;
 
   do {
 #ifdef  unix
-	if( __sync_lock_test_and_set(latch->mutex, 1) )
-		continue;
+	prev = __sync_fetch_and_or(latch->lock, PEND | XCL);
 #else
-	if( _InterlockedExchange8(latch->mutex, 1) )
-		continue;
+	prev = _InterlockedOr16(latch->lock, PEND | XCL);
 #endif
-	if( prev = !(latch->share | latch->exclusive) )
-		latch->exclusive = 1, latch->pending = 0;
-	else
-		latch->pending = 1;
-#ifdef unix
-	*latch->mutex = 0;
-#else
-	_InterlockedExchange8(latch->mutex, 0);
-#endif
-	if( prev )
+	if( !(prev & XCL) )
+	  if( !(prev & ~BOTH) )
 		return;
+	  else
+#ifdef unix
+		__sync_fetch_and_and (latch->lock, ~XCL);
+#else
+		_InterlockedAnd16(latch->lock, ~XCL);
+#endif
 #ifdef  unix
   } while( sched_yield(), 1 );
 #else
@@ -416,26 +487,25 @@ uint prev;
 
 int bt_spinwritetry(BtSpinLatch *latch)
 {
-uint prev;
+ushort prev;
 
-#ifdef unix
-	if( __sync_lock_test_and_set(latch->mutex, 1) )
-		return 0;
+#ifdef  unix
+	prev = __sync_fetch_and_or(latch->lock, XCL);
 #else
-	if( _InterlockedExchange8(latch->mutex, 1) )
-		return 0;
+	prev = _InterlockedOr16(latch->lock, XCL);
 #endif
 	//	take write access if all bits are clear
 
-	if( prev = !(latch->exclusive | latch->share) )
-		latch->exclusive = 1;
-
+	if( !(prev & XCL) )
+	  if( !(prev & ~BOTH) )
+		return 1;
+	  else
 #ifdef unix
-	*latch->mutex = 0;
+		__sync_fetch_and_and (latch->lock, ~XCL);
 #else
-	_InterlockedExchange8(latch->mutex, 0);
+		_InterlockedAnd16(latch->lock, ~XCL);
 #endif
-	return prev;
+	return 0;
 }
 
 //	clear write mode
@@ -443,17 +513,9 @@ uint prev;
 void bt_spinreleasewrite(BtSpinLatch *latch)
 {
 #ifdef unix
-	while( __sync_lock_test_and_set(latch->mutex, 1) )
-		sched_yield();
+	__sync_fetch_and_and(latch->lock, ~BOTH);
 #else
-	while( _InterlockedExchange8(latch->mutex, 1) )
-		SwitchToThread();
-#endif
-	latch->exclusive = 0;
-#ifdef unix
-	*latch->mutex = 0;
-#else
-	_InterlockedExchange8(latch->mutex, 0);
+	_InterlockedAnd16(latch->lock, ~BOTH);
 #endif
 }
 
@@ -462,17 +524,9 @@ void bt_spinreleasewrite(BtSpinLatch *latch)
 void bt_spinreleaseread(BtSpinLatch *latch)
 {
 #ifdef unix
-	while( __sync_lock_test_and_set(latch->mutex, 1) )
-		sched_yield();
+	__sync_fetch_and_add(latch->lock, -SHARE);
 #else
-	while( _InterlockedExchange8(latch->mutex, 1) )
-		SwitchToThread();
-#endif
-	latch->share--;
-#ifdef unix
-	*latch->mutex = 0;
-#else
-	_InterlockedExchange8(latch->mutex, 0);
+	_InterlockedExchangeAdd16(latch->lock, -SHARE);
 #endif
 }
 
@@ -678,8 +732,9 @@ BtPage page;
 	lvl = (latch->pin & LVL_mask) >> LVL_shift;
 
 	//	see if we are evicting this level yet
+	//	or if we are on same chain as hashidx
 
-	if( lvl > bt->latchmgr->safelevel )
+	if( idx == hashidx || lvl > bt->latchmgr->safelevel )
 		continue;
 
 	if( !bt_spinwritetry (bt->table[idx].latch) )
@@ -997,19 +1052,19 @@ void bt_lockpage(BtLock mode, BtLatchSet *latch)
 {
 	switch( mode ) {
 	case BtLockRead:
-		bt_spinreadlock (latch->readwr);
+		ReadLock (latch->readwr);
 		break;
 	case BtLockWrite:
-		bt_spinwritelock (latch->readwr);
+		WriteLock (latch->readwr);
 		break;
 	case BtLockAccess:
-		bt_spinreadlock (latch->access);
+		ReadLock (latch->access);
 		break;
 	case BtLockDelete:
-		bt_spinwritelock (latch->access);
+		WriteLock (latch->access);
 		break;
 	case BtLockParent:
-		bt_spinwritelock (latch->parent);
+		WriteLock (latch->parent);
 		break;
 	}
 }
@@ -1020,19 +1075,19 @@ void bt_unlockpage(BtLock mode, BtLatchSet *latch)
 {
 	switch( mode ) {
 	case BtLockRead:
-		bt_spinreleaseread (latch->readwr);
+		ReadRelease (latch->readwr);
 		break;
 	case BtLockWrite:
-		bt_spinreleasewrite (latch->readwr);
+		WriteRelease (latch->readwr);
 		break;
 	case BtLockAccess:
-		bt_spinreleaseread (latch->access);
+		ReadRelease (latch->access);
 		break;
 	case BtLockDelete:
-		bt_spinreleasewrite (latch->access);
+		WriteRelease (latch->access);
 		break;
 	case BtLockParent:
-		bt_spinreleasewrite (latch->parent);
+		WriteRelease (latch->parent);
 		break;
 	}
 }
