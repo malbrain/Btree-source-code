@@ -619,7 +619,7 @@ int lvl;
 #ifdef unix
 	__sync_fetch_and_add (&bt->latchmgr->cache[page->lvl], 1);
 #else
-	_InterlockedAdd(&bt->latchmgr->cache[page->lvl], 1);
+	_InterlockedExchangeAdd(&bt->latchmgr->cache[page->lvl], 1);
 #endif
 	return bt->err = 0;
 }
@@ -758,7 +758,7 @@ BtPage page;
 	posix_fadvise (bt->idx, page_no << bt->page_bits, bt->page_size, POSIX_FADV_WILLNEED);
 	__sync_fetch_and_add (&bt->latchmgr->cache[page->lvl], -1);
 #else
-	_InterlockedAdd(&bt->latchmgr->cache[page->lvl], -1);
+	_InterlockedExchangeAdd(&bt->latchmgr->cache[page->lvl], -1);
 #endif
 	if( page->dirty )
 	  if( bt_writepage (bt, page, latch->page_no) )
