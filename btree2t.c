@@ -56,7 +56,7 @@ typedef unsigned short		ushort;
 typedef unsigned int		uint;
 #endif
 
-#define BT_latchtable	128					// number of latch manager slots
+#define BT_latchtable	8192					// number of latch manager slots
 
 #define BT_ro 0x6f72	// ro
 #define BT_rw 0x7772	// rw
@@ -811,7 +811,7 @@ struct flock lock[1];
 
 	bt->hashsize = hashsize;
 
-	if( bt->nodemax = nodemax ) {
+	if( bt->nodemax = nodemax++ ) {
 #ifdef unix
 	  bt->nodes = calloc (nodemax, sizeof(BtHash));
 	  bt->cache = calloc (hashsize, sizeof(ushort));
@@ -830,12 +830,19 @@ struct flock lock[1];
 	// and page(s) of latches
 
 	memset (latchmgr, 0, 1 << bits);
-	nlatchpage = BT_latchtable / (bt->page_size / sizeof(BtLatchSet)) + 1; 
+
+	nlatchpage = BT_latchtable;
+	if( nlatchpage > nodemax )
+		nlatchpage = nodemax;
+	nlatchpage *= sizeof(BtLatchSet);
+	nlatchpage += bt->page_size - 1;
+	nlatchpage /= bt->page_size;
+
 	bt_putid(latchmgr->alloc->right, MIN_lvl+1+nlatchpage);
 	latchmgr->alloc->bits = bt->page_bits;
 
 	latchmgr->nlatchpage = nlatchpage;
-	latchmgr->latchtotal = nlatchpage * (bt->page_size / sizeof(BtLatchSet));
+	latchmgr->latchtotal = nlatchpage * bt->page_size / sizeof(BtLatchSet);
 
 	//  initialize latch manager
 
@@ -1173,12 +1180,12 @@ BtHash *hash;
 BtPage bt_linklru(BtDb *bt, BtHash *hash, uid page_no)
 {
 int flag;
-off64_t off = (page_no & ~bt->hashmask) << bt->page_bits;
+off64_t off = (page_no & ~(uid)bt->hashmask) << bt->page_bits;
 off64_t limit = off + ((bt->hashmask+1) << bt->page_bits);
 BtHash *node;
 
 	memset(hash, 0, sizeof(BtHash));
-	hash->page_no = (page_no & ~bt->hashmask);
+	hash->page_no = (page_no & ~(uid)bt->hashmask);
 	bt_linkhash(bt, hash, page_no);
 
 	if( node = hash->lrunext = bt->lrufirst )
@@ -1258,7 +1265,7 @@ BtPage page;
 #ifdef unix
 		munmap (hash->page, (bt->hashmask+1) << bt->page_bits);
 #else
-		FlushViewOfFile(hash->page, 0);
+//		FlushViewOfFile(hash->page, 0);
 		UnmapViewOfFile(hash->page);
 		CloseHandle(hash->hmap);
 #endif
