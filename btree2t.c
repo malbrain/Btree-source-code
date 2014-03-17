@@ -1,6 +1,6 @@
-// btree version 2t
+// btree version 2t  sched_yield version of spinlocks
 //	with reworked bt_deletekey code
-// 25 FEB 2014
+// 12 MAR 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -91,11 +91,15 @@ typedef enum{
 // grant write lock when share == 0
 
 volatile typedef struct {
-	unsigned char mutex[1];
-	unsigned char exclusive:1;
-	unsigned char pending:1;
-	ushort share;
+	ushort exclusive:1;
+	ushort pending:1;
+	ushort share:14;
 } BtSpinLatch;
+
+#define XCL 1
+#define PEND 2
+#define BOTH 3
+#define SHARE 4
 
 //  hash table entries
 
@@ -358,7 +362,7 @@ BtKey ptr;
 	return bt->err = err;
 }
 
-//	Latch Manager
+//	Spin Latch Manager
 
 //	wait until write lock mode is clear
 //	and add 1 to the share count
@@ -368,28 +372,20 @@ void bt_spinreadlock(BtSpinLatch *latch)
 ushort prev;
 
   do {
-	//	obtain latch mutex
 #ifdef unix
-	if( __sync_lock_test_and_set(latch->mutex, 1) )
-		continue;
+	prev = __sync_fetch_and_add ((ushort *)latch, SHARE);
 #else
-	if( _InterlockedExchange8(latch->mutex, 1) )
-		continue;
+	prev = _InterlockedExchangeAdd16((ushort *)latch, SHARE);
 #endif
 	//  see if exclusive request is granted or pending
 
-	if( prev = !(latch->exclusive | latch->pending) )
-		latch->share++;
-
-#ifdef unix
-	*latch->mutex = 0;
-#else
-	_InterlockedExchange8(latch->mutex, 0);
-#endif
-
-	if( prev )
+	if( !(prev & BOTH) )
 		return;
-
+#ifdef unix
+	prev = __sync_fetch_and_add ((ushort *)latch, -SHARE);
+#else
+	prev = _InterlockedExchangeAdd16((ushort *)latch, -SHARE);
+#endif
 #ifdef  unix
   } while( sched_yield(), 1 );
 #else
@@ -401,27 +397,23 @@ ushort prev;
 
 void bt_spinwritelock(BtSpinLatch *latch)
 {
-uint prev;
+ushort prev;
 
   do {
 #ifdef  unix
-	if( __sync_lock_test_and_set(latch->mutex, 1) )
-		continue;
+	prev = __sync_fetch_and_or((ushort *)latch, PEND | XCL);
 #else
-	if( _InterlockedExchange8(latch->mutex, 1) )
-		continue;
+	prev = _InterlockedOr16((ushort *)latch, PEND | XCL);
 #endif
-	if( prev = !(latch->share | latch->exclusive) )
-		latch->exclusive = 1, latch->pending = 0;
-	else
-		latch->pending = 1;
-#ifdef unix
-	*latch->mutex = 0;
-#else
-	_InterlockedExchange8(latch->mutex, 0);
-#endif
-	if( prev )
+	if( !(prev & XCL) )
+	  if( !(prev & ~BOTH) )
 		return;
+	  else
+#ifdef unix
+		__sync_fetch_and_and ((ushort *)latch, ~XCL);
+#else
+		_InterlockedAnd16((ushort *)latch, ~XCL);
+#endif
 #ifdef  unix
   } while( sched_yield(), 1 );
 #else
@@ -436,26 +428,25 @@ uint prev;
 
 int bt_spinwritetry(BtSpinLatch *latch)
 {
-uint prev;
+ushort prev;
 
-#ifdef unix
-	if( __sync_lock_test_and_set(latch->mutex, 1) )
-		return 0;
+#ifdef  unix
+	prev = __sync_fetch_and_or((ushort *)latch, XCL);
 #else
-	if( _InterlockedExchange8(latch->mutex, 1) )
-		return 0;
+	prev = _InterlockedOr16((ushort *)latch, XCL);
 #endif
 	//	take write access if all bits are clear
 
-	if( prev = !(latch->exclusive | latch->share) )
-		latch->exclusive = 1;
-
+	if( !(prev & XCL) )
+	  if( !(prev & ~BOTH) )
+		return 1;
+	  else
 #ifdef unix
-	*latch->mutex = 0;
+		__sync_fetch_and_and ((ushort *)latch, ~XCL);
 #else
-	_InterlockedExchange8(latch->mutex, 0);
+		_InterlockedAnd16((ushort *)latch, ~XCL);
 #endif
-	return prev;
+	return 0;
 }
 
 //	clear write mode
@@ -463,17 +454,9 @@ uint prev;
 void bt_spinreleasewrite(BtSpinLatch *latch)
 {
 #ifdef unix
-	while( __sync_lock_test_and_set(latch->mutex, 1) )
-		sched_yield();
+	__sync_fetch_and_and((ushort *)latch, ~BOTH);
 #else
-	while( _InterlockedExchange8(latch->mutex, 1) )
-		SwitchToThread();
-#endif
-	latch->exclusive = 0;
-#ifdef unix
-	*latch->mutex = 0;
-#else
-	_InterlockedExchange8(latch->mutex, 0);
+	_InterlockedAnd16((ushort *)latch, ~BOTH);
 #endif
 }
 
@@ -482,17 +465,9 @@ void bt_spinreleasewrite(BtSpinLatch *latch)
 void bt_spinreleaseread(BtSpinLatch *latch)
 {
 #ifdef unix
-	while( __sync_lock_test_and_set(latch->mutex, 1) )
-		sched_yield();
+	__sync_fetch_and_add((ushort *)latch, -SHARE);
 #else
-	while( _InterlockedExchange8(latch->mutex, 1) )
-		SwitchToThread();
-#endif
-	latch->share--;
-#ifdef unix
-	*latch->mutex = 0;
-#else
-	_InterlockedExchange8(latch->mutex, 0);
+	_InterlockedExchangeAdd16((ushort *)latch, -SHARE);
 #endif
 }
 
@@ -728,6 +703,7 @@ int flag;
 #ifndef unix
 SYSTEM_INFO sysinfo[1];
 OVERLAPPED ovl[1];
+uint len, flags;
 #else
 struct flock lock[1];
 #endif
@@ -2133,6 +2109,8 @@ uint cnt = 0;
 BtKey ptr;
 
 #ifdef unix
+	posix_fadvise( bt->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
 	if( *(ushort *)(bt->latchmgr->lock) )
 		fprintf(stderr, "Alloc page locked\n");
 	*(ushort *)(bt->latchmgr->lock) = 0;
@@ -2179,7 +2157,20 @@ BtKey ptr;
 	page_no = LEAF_page;
 
 	while( page_no < bt_getid(bt->latchmgr->alloc->right) ) {
-		pread (bt->idx, bt->frame, bt->page_size, page_no << bt->page_bits);
+	off64_t off = page_no << bt->page_bits;
+#ifdef unix
+		pread (bt->idx, bt->frame, bt->page_size, off);
+#else
+		DWORD amt[1];
+
+		  SetFilePointer (bt->idx, (long)off, (long*)(&off)+1, FILE_BEGIN);
+
+		  if( !ReadFile(bt->idx, bt->frame, bt->page_size, amt, NULL))
+			fprintf(stderr, "page %.8x unable to read\n", page_no);
+
+		  if( *amt <  bt->page_size )
+			fprintf(stderr, "page %.8x unable to read\n", page_no);
+#endif
 		if( !bt->frame->free ) {
 		 for( idx = 0; idx++ < bt->frame->cnt - 1; ) {
 		  ptr = keyptr(bt->frame, idx+1);
@@ -2195,7 +2186,6 @@ BtKey ptr;
 		page_no = next;
 	}
 	return cnt - 1;
-#endif
 }
 
 #ifndef unix
