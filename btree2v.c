@@ -117,24 +117,15 @@ volatile typedef struct {
 #define MASK 0x3	// both write bits
 #define RINC 0x4	// reader increment
 
-//	lite weight spin latch
-
 typedef struct {
   union {
 	struct {
-	  uint xlock:1;		// writer has exclusive lock
-	  uint share:15;	// count of readers with lock
-	  uint read:1;		// readers are waiting
-	  uint wrt:15;		// count of writers waiting
+	  ushort serving;
+	  ushort next;
 	} bits[1];
 	uint value[1];
   };
-} BtSpinLatch;
-
-#define XCL 1
-#define SHARE 2
-#define READ (SHARE * 32768)
-#define WRT (READ * 2)
+} BtMutex;
 
 //	Define the length of the page and key pointers
 
@@ -188,7 +179,7 @@ typedef struct BtPage_ {
 
 typedef struct {
 	struct BtPage_ alloc[2];	// next & free page_nos in right ptr
-	BtSpinLatch lock[1];		// allocation area lite latch
+	BtMutex lock[1];			// allocation area lite latch
 	volatile uint latchdeployed;// highest number of latch entries deployed
 	volatile uint nlatchpage;	// number of latch pages at BT_latch
 	volatile uint latchtotal;	// number of page latch entries
@@ -201,8 +192,8 @@ typedef struct {
 //  latch hash table entries
 
 typedef struct {
-	volatile uint slot;		// Latch table entry at head of collision chain
-	BtSpinLatch latch[1];	// lock for the collision chain
+	unsigned char busy[1];	// Latch table entry is busy being reallocated
+	uint slot:24;			// Latch table entry at head of collision chain
 } BtHashEntry;
 
 //	latch manager table structure
@@ -447,124 +438,28 @@ void ReadRelease (RWLock *lock)
 	sys_futex( (uint *)lock->ticket, FUTEX_WAKE_BITSET, INT_MAX, NULL, NULL, QueWr );
 }
 
-//	lite weight spin lock Latch Manager
+//	lite weight FIFO mutex Manager
 
-//	wait until write lock mode is clear
-//	and add 1 to the share count
-
-void bt_spinreadlock(BtSpinLatch *latch)
+void bt_getmutex (BtMutex *mutex)
 {
-BtSpinLatch prev[1];
-uint slept = 0;
+uint prev, ours;
 
-  while( 1 ) {
-	*prev->value = __sync_fetch_and_add(latch->value, SHARE);
+	ours = __sync_fetch_and_add (&mutex->bits->next, 1);
 
-	//  see if exclusive request is already granted
-	//	 or if it is reader phase
-
-	if( slept || !prev->bits->wrt )
-	  if( !prev->bits->xlock )
-		return;
-
-	slept = 1;
-	prev->bits->read = 1;
-	__sync_fetch_and_or (latch->value, READ);
-	__sync_fetch_and_sub (latch->value, SHARE);
-	sys_futex( latch->value, FUTEX_WAIT_BITSET, *prev->value, NULL, NULL, QueRd );
-  }
-}
-
-//	wait for other read and write latches to relinquish
-
-void bt_spinwritelock(BtSpinLatch *latch)
-{
-BtSpinLatch prev[1];
-uint slept = 0;
-
-  while( 1 ) {
-	*prev->value = __sync_fetch_and_or(latch->value, XCL);
-
-	if( !prev->bits->xlock )			// did we set XCL bit?
-	  if( !(prev->bits->share) )	{		// any readers?
-	    if( slept )
-		  __sync_fetch_and_sub(latch->value, WRT);
-		return;
-	  } else
-		__sync_fetch_and_and(latch->value, ~XCL);
-
-	if( !slept ) {
-		prev->bits->wrt++;
-		__sync_fetch_and_add(latch->value, WRT);
+	while( 1 ) {
+		prev = mutex->value[0];
+		if( ours == mutex->bits->serving )
+		  break;
+		sys_futex( mutex->value, FUTEX_WAIT_BITSET, prev, NULL, NULL, 0 );
 	}
-
-	sys_futex (latch->value, FUTEX_WAIT_BITSET, *prev->value, NULL, NULL, QueWr);
-	slept = 1;
-  }
 }
 
-//	try to obtain write lock
-
-//	return 1 if obtained,
-//		0 otherwise
-
-int bt_spinwritetry(BtSpinLatch *latch)
+void bt_relmutex (BtMutex *mutex)
 {
-BtSpinLatch prev[1];
+ushort serving = ++mutex->bits->serving;
 
-	*prev->value = __sync_fetch_and_or(latch->value, XCL);
-
-	//	take write access if all bits are clear
-
-	if( !prev->bits->xlock ) {
-	  if( !prev->bits->share )
-		return 1;
-	} else
-		__sync_fetch_and_and(latch->value, ~XCL);
-
-	return 0;
-}
-
-//	clear write mode
-//	wake up sleeping readers
-
-void bt_spinreleasewrite(BtSpinLatch *latch)
-{
-BtSpinLatch prev[1];
-
-	*prev->value = __sync_fetch_and_and(latch->value, ~(XCL | READ));
-
-	//	alternate read/write phases
-
-	if( prev->bits->read )
-	  if( sys_futex( latch->value, FUTEX_WAKE_BITSET, INT_MAX, NULL, NULL, QueRd ) )
-		return;
-
-	if( prev->bits->wrt )
-	  sys_futex( latch->value, FUTEX_WAKE_BITSET, 1, NULL, NULL, QueWr );
-}
-
-//	decrement reader count
-//	wake up sleeping writers
-
-void bt_spinreleaseread(BtSpinLatch *latch)
-{
-BtSpinLatch prev[1];
-
-	*prev->value = __sync_sub_and_fetch(latch->value, SHARE);
-
-	//	alternate read/write phases
-
-	if( prev->bits->wrt ) {
-	  if( !prev->bits->share )
-		sys_futex( latch->value, FUTEX_WAKE_BITSET, 1, NULL, NULL, QueWr );
-	  return;
-	}
-
-	if( prev->bits->read ) {
-	  __sync_fetch_and_and(latch->value, ~READ);
-	  sys_futex (latch->value, FUTEX_WAKE_BITSET, INT_MAX, NULL, NULL, QueRd);
-	}
+	if( mutex->bits->next != serving )
+	  sys_futex( mutex->value, FUTEX_WAKE_BITSET, 1, NULL, NULL, 0 );
 }
 
 //	read page from permanent location in Btree file
@@ -687,7 +582,8 @@ BtPage page;
 
   //  try to find our entry
 
-  bt_spinwritelock(bt->table[hashidx].latch);
+  while( __sync_fetch_and_or (bt->table[hashidx].busy, 1) == 1 )
+	sched_yield();
 
   if( slot = bt->table[hashidx].slot ) do
   {
@@ -711,7 +607,7 @@ BtPage page;
 	_InterlockedIncrement16 (&latch->pin);
 	_InterlockedOr16 (&latch->pin, lvl);
 #endif
-	bt_spinreleasewrite(bt->table[hashidx].latch);
+	bt->table[hashidx].busy[0] = 0;
 	return latch;
   }
 
@@ -726,7 +622,7 @@ BtPage page;
 		latch = bt->latchsets + slot;
 		if( bt_latchlink (bt, hashidx, slot, page_no) )
 			return NULL;
-		bt_spinreleasewrite (bt->table[hashidx].latch);
+		bt->table[hashidx].busy[0] = 0;
 		return latch;
 	}
 
@@ -774,7 +670,7 @@ BtPage page;
 	if( idx == hashidx || lvl > bt->latchmgr->safelevel )
 		continue;
 
-	if( !bt_spinwritetry (bt->table[idx].latch) )
+	if( __sync_fetch_and_or (bt->table[idx].busy, 1) == 1 )
 		continue;
 
 	if( latch->pin & ~LVL_mask ) {
@@ -784,7 +680,7 @@ BtPage page;
 #else
 		_InterlockedExchangeAdd16 (&latch->pin, -CLOCK_unit);
 #endif
-	  bt_spinreleasewrite (bt->table[idx].latch);
+	  bt->table[idx].busy[0] = 0;
 	  continue;
 	}
 
@@ -811,12 +707,12 @@ BtPage page;
 	if( latch->next )
 		bt->latchsets[latch->next].prev = latch->prev;
 
-	bt_spinreleasewrite (bt->table[idx].latch);
+	bt->table[idx].busy[0] = 0;
 
 	if( bt_latchlink (bt, hashidx, slot, page_no) )
 		return NULL;
 
-	bt_spinreleasewrite (bt->table[hashidx].latch);
+	bt->table[hashidx].busy[0] = 0;
 	return latch;
   }
 }
@@ -1139,7 +1035,7 @@ BtPage temp;
 
 	//	lock allocation page
 
-	bt_spinwritelock(bt->latchmgr->lock);
+	bt_getmutex(bt->latchmgr->lock);
 
 	// use empty chain first
 	// else allocate empty page
@@ -1151,7 +1047,7 @@ BtPage temp;
 		return 0;
 
 	  bt_putid(bt->latchmgr->alloc[1].right, bt_getid(temp->right));
-	  bt_spinreleasewrite(bt->latchmgr->lock);
+	  bt_relmutex(bt->latchmgr->lock);
 	  memcpy (temp, page, bt->page_size);
 
 	  bt_update (bt, temp);
@@ -1160,7 +1056,7 @@ BtPage temp;
 	} else {
 	  new_page = bt_getid(bt->latchmgr->alloc->right);
 	  bt_putid(bt->latchmgr->alloc->right, new_page+1);
-	  bt_spinreleasewrite(bt->latchmgr->lock);
+	  bt_relmutex(bt->latchmgr->lock);
 
 	  if( bt_writepage (bt, page, new_page) )
 		return 0;
@@ -1220,7 +1116,7 @@ BtPage page = bt_mappage (bt, latch);
 
 	//	lock allocation page
 
-	bt_spinwritelock (bt->latchmgr->lock);
+	bt_getmutex (bt->latchmgr->lock);
 
 	//	store chain in second right
 	bt_putid(page->right, bt_getid(bt->latchmgr->alloc[1].right));
@@ -1237,7 +1133,7 @@ BtPage page = bt_mappage (bt, latch);
 
 	// unlock allocation page
 
-	bt_spinreleasewrite (bt->latchmgr->lock);
+	bt_relmutex (bt->latchmgr->lock);
 	bt_update (bt, bt->latchmgr->alloc);
 	return 0;
 }
@@ -2062,10 +1958,10 @@ BtKey ptr;
 		fprintf(stderr, "cache: %d lvl %d blocks\n", blks[idx], idx);
 
 	for( hashidx = 0; hashidx < bt->latchmgr->latchhash; hashidx++ ) {
-	  if( *(ushort *)(bt->table[hashidx].latch) )
+	  if( bt->table[hashidx].busy[0] )
 			fprintf(stderr, "hash entry %d locked\n", hashidx);
 
-	  *(ushort *)(bt->table[hashidx].latch) = 0;
+	  bt->table[hashidx].busy[0] = 0;
 	}
 
 	memset (blks, 0, sizeof(blks));
