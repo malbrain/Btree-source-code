@@ -19,6 +19,8 @@ threads2i.c     Multi-Threaded/Multi-Process with latching implemented by a latc
 
 threads2j.c     Multi-Threaded/Multi-Process with latching implemented by a latch manager with test & set locks in the first few btree pages with Linux futex system calls during contention.
 
+threadskv1.c	Multi-Threaded/Multi-Process based on threads2i.c that generalizes key/value storage in the btree pages. The page slots are reduced to 16 or 32 bits, and the value byte storage occurs along with the key storage.
+
 Compilation is achieved on linux or Windows by:
 
 gcc -D STANDALONE threads2h.c -lpthread
