@@ -281,7 +281,7 @@ typedef enum {
 // B-Tree functions
 extern void bt_close (BtDb *bt);
 extern BtDb *bt_open (BtMgr *mgr);
-extern BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uint lvl, unsigned char *value, uint vallen);
+extern BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uint lvl, void *value, uint vallen);
 extern BTERR  bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl);
 extern int bt_findkey    (BtDb *bt, unsigned char *key, uint keylen, unsigned char *value, uint vallen);
 extern uint bt_startkey  (BtDb *bt, unsigned char *key, uint len);
@@ -292,15 +292,16 @@ extern BtMgr *bt_mgr (char *name, uint mode, uint bits, uint poolsize, uint segs
 void bt_mgrclose (BtMgr *mgr);
 
 //  Helper functions to return slot values
+//	from the cursor page.
 
 extern BtKey bt_key (BtDb *bt, uint slot);
 extern BtVal bt_val (BtDb *bt, uint slot);
 
 //  BTree page number constants
-#define ALLOC_page		0	// allocation & lock manager hash table
+#define ALLOC_page		0	// allocation & latch manager hash table
 #define ROOT_page		1	// root of the btree
 #define LEAF_page		2	// first page of leaves
-#define LATCH_page		3	// pages for lock manager
+#define LATCH_page		3	// pages for latch manager
 
 //	Number of levels to create in a new BTree
 
@@ -309,7 +310,7 @@ extern BtVal bt_val (BtDb *bt, uint slot);
 //  The page is allocated from low and hi ends.
 //  The key slots are allocated from the bottom,
 //	while the text and value of the key
-//  is allocated from the top.  When the two
+//  are allocated from the top.  When the two
 //  areas meet, the page is split into two.
 
 //  A key consists of a length byte, two bytes of
@@ -753,7 +754,7 @@ uint slot;
 
 #ifdef unix
 	munmap (mgr->latchsets, mgr->latchmgr->nlatchpage * mgr->page_size);
-	munmap (mgr->latchmgr, mgr->page_size);
+	munmap (mgr->latchmgr, 2 * mgr->page_size);
 #else
 	FlushViewOfFile(mgr->latchmgr, 0);
 	UnmapViewOfFile(mgr->latchmgr);
@@ -992,13 +993,18 @@ SYSTEM_INFO sysinfo[1];
 
 mgrlatch:
 #ifdef unix
+	// mlock the root page and the latchmgr page
+
 	flag = PROT_READ | PROT_WRITE;
-	mgr->latchmgr = mmap (0, mgr->page_size, flag, MAP_SHARED, mgr->idx, ALLOC_page * mgr->page_size);
+	mgr->latchmgr = mmap (0, 2 * mgr->page_size, flag, MAP_SHARED, mgr->idx, ALLOC_page * mgr->page_size);
 	if( mgr->latchmgr == MAP_FAILED )
 		return bt_mgrclose (mgr), NULL;
+	mlock (mgr->latchmgr, 2 * mgr->page_size);
+
 	mgr->latchsets = (BtLatchSet *)mmap (0, mgr->latchmgr->nlatchpage * mgr->page_size, flag, MAP_SHARED, mgr->idx, LATCH_page * mgr->page_size);
 	if( mgr->latchsets == MAP_FAILED )
 		return bt_mgrclose (mgr), NULL;
+	mlock (mgr->latchsets, mgr->latchmgr->nlatchpage * mgr->page_size);
 #else
 	flag = PAGE_READWRITE;
 	mgr->halloc = CreateFileMapping(mgr->idx, NULL, flag, 0, (BT_latchtable / (mgr->page_size / sizeof(BtLatchSet)) + 1 + LATCH_page) * mgr->page_size, NULL);
@@ -1145,6 +1151,7 @@ uint subpage = (uint)(page_no & bt->mgr->poolmask); // page within mapping
 BtPage page;
 
 	page = (BtPage)(pool->map + (subpage << bt->mgr->page_bits));
+//	madvise (page, bt->mgr->page_size, MADV_WILLNEED);
 	return page;
 }
 
@@ -1848,7 +1855,7 @@ BtVal val;
 		val = valptr(bt->frame, cnt);
 		nxt -= val->len + 1;
 		((unsigned char *)page)[nxt] = val->len;
-		memcpy ((unsigned char *)page + nxt + 1, val, val->len);
+		memcpy ((unsigned char *)page + nxt + 1, val->value, val->len);
 
 		// set up the slot
 
@@ -2052,7 +2059,7 @@ BtVal val;
 }
 //  Insert new key into the btree at given level.
 
-BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint keylen, uint lvl, unsigned char *value, uint vallen)
+BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint keylen, uint lvl, void *value, uint vallen)
 {
 BtPageSet set[1];
 uint slot, idx;
@@ -2298,7 +2305,7 @@ BtKey ptr;
 
 		if( *latch->parent->rin & MASK )
 			fprintf(stderr, "latchset %d parentlocked for page %.8x\n", idx, latch->page_no);
-		memset ((ushort *)latch->access, 0, sizeof(RWLock));
+		memset ((ushort *)latch->parent, 0, sizeof(RWLock));
 
 		if( latch->pin ) {
 			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no);
