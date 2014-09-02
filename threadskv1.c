@@ -742,7 +742,7 @@ uint slot;
 		pool = mgr->pool + slot;
 		if( pool->slot )
 #ifdef unix
-			munmap (pool->map, (mgr->poolmask+1) << mgr->page_bits);
+			munmap (pool->map, (uid)(mgr->poolmask+1) << mgr->page_bits);
 #else
 		{
 			FlushViewOfFile(pool->map, 0);
@@ -1125,7 +1125,7 @@ int flag;
 
 #ifdef unix
 	flag = PROT_READ | ( bt->mgr->mode == BT_ro ? 0 : PROT_WRITE );
-	pool->map = mmap (0, (bt->mgr->poolmask+1) << bt->mgr->page_bits, flag, MAP_SHARED, bt->mgr->idx, off);
+	pool->map = mmap (0, (uid)(bt->mgr->poolmask+1) << bt->mgr->page_bits, flag, MAP_SHARED, bt->mgr->idx, off);
 	if( pool->map == MAP_FAILED )
 		return bt->err = BTERR_map;
 
@@ -1136,7 +1136,7 @@ int flag;
 		return bt->err = BTERR_map;
 
 	flag = ( bt->mgr->mode == BT_ro ? FILE_MAP_READ : FILE_MAP_WRITE );
-	pool->map = MapViewOfFile(pool->hmap, flag, (DWORD)(off >> 32), (DWORD)off, (bt->mgr->poolmask+1) << bt->mgr->page_bits);
+	pool->map = MapViewOfFile(pool->hmap, flag, (DWORD)(off >> 32), (DWORD)off, (uid)(bt->mgr->poolmask+1) << bt->mgr->page_bits);
 	if( !pool->map )
 		return bt->err = BTERR_map;
 #endif
@@ -1272,7 +1272,7 @@ BtPool *pool, *node, *next;
 
 		//	remove old file mapping
 #ifdef unix
-		munmap (pool->map, (bt->mgr->poolmask+1) << bt->mgr->page_bits);
+		munmap (pool->map, (uid)(bt->mgr->poolmask+1) << bt->mgr->page_bits);
 #else
 //		FlushViewOfFile(pool->map, 0);
 		UnmapViewOfFile(pool->map);
@@ -1790,7 +1790,7 @@ int ret;
 	// if key exists, return TRUE
 	//	otherwise return FALSE
 
-	if( !keycmp (ptr, key, keylen) ) {
+	if( !slotptr(set->page, slot)->dead && !keycmp (ptr, key, keylen) ) {
 		val = valptr (set->page,slot);
 		if( valmax > val->len )
 			valmax = val->len;
@@ -2077,7 +2077,7 @@ BtVal val;
 			return bt->err;
 		}
 
-		// if key already exists, update id and return
+		// if key already exists, update value and return
 
 		if( reuse = !keycmp (ptr, key, keylen) )
 		  if( val = valptr(set->page, slot), val->len >= vallen ) {
