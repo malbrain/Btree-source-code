@@ -1504,8 +1504,10 @@ BtPool *prevpool;
 	//  find key on page at this level
 	//  and descend to requested level
 
-	if( !set->page->kill )
-	 if( slot = bt_findslot (set, key, len) ) {
+	if( set->page->kill )
+	  goto slideright;
+
+	if( slot = bt_findslot (set, key, len) ) {
 	  if( drill == lvl )
 		return slot;
 
@@ -1518,7 +1520,7 @@ BtPool *prevpool;
 	  page_no = bt_getid(valptr(set->page, slot)->value);
 	  drill--;
 	  continue;
-	 }
+	}
 
 	//  or slide right into next page
 
@@ -1566,7 +1568,6 @@ BTERR bt_fixfence (BtDb *bt, BtPageSet *set, uint lvl)
 {
 unsigned char leftkey[256], rightkey[256];
 unsigned char value[BtId];
-uid page_no;
 BtKey ptr;
 
 	//	remove the old fence value
@@ -1579,14 +1580,13 @@ BtKey ptr;
 
 	ptr = keyptr(set->page, set->page->cnt);
 	memcpy (leftkey, ptr, ptr->len + 1);
-	page_no = set->page_no;
 
 	bt_lockpage (BtLockParent, set->latch);
 	bt_unlockpage (BtLockWrite, set->latch);
 
 	//	insert new (now smaller) fence key
 
-	bt_putid (value, page_no);
+	bt_putid (value, set->page_no);
 
 	if( bt_insertkey (bt, leftkey+1, *leftkey, lvl+1, value, BtId) )
 	  return bt->err;
@@ -1844,18 +1844,18 @@ BtVal val;
 		if( cnt < max && slotptr(bt->frame,cnt)->dead )
 			continue;
 
-		// copy the key across
-
-		key = keyptr(bt->frame, cnt);
-		nxt -= key->len + 1;
-		memcpy ((unsigned char *)page + nxt, key, key->len + 1);
-
 		// copy the value across
 
 		val = valptr(bt->frame, cnt);
 		nxt -= val->len + 1;
 		((unsigned char *)page)[nxt] = val->len;
 		memcpy ((unsigned char *)page + nxt + 1, val->value, val->len);
+
+		// copy the key across
+
+		key = keyptr(bt->frame, cnt);
+		nxt -= key->len + 1;
+		memcpy ((unsigned char *)page + nxt, key, key->len + 1);
 
 		// set up the slot
 
