@@ -3,7 +3,7 @@ Btree-source-code
 
 A working project for High-concurrency B-tree source code in C
 
-There are seven files in the btree source code:
+Here are files in the btree source code:
 
 btree2s.c       Single Threaded/MultiProcess version that removes keys all the way back to an original empty btree, placing removed nodes on a free list.  Operates under either memory mapping or file I/O.  Recommended btrees hosted on network file systems.
 
@@ -20,6 +20,10 @@ threads2i.c     Multi-Threaded/Multi-Process with latching implemented by a latc
 threads2j.c     Multi-Threaded/Multi-Process with latching implemented by a latch manager with test & set locks in the first few btree pages with Linux futex system calls during contention.
 
 threadskv1.c	Multi-Threaded/Multi-Process based on threads2i.c that generalizes key/value storage in the btree pages. The page slots are reduced to 16 or 32 bits, and the value byte storage occurs along with the key storage.
+
+threadskv2.c	Multi-Threaded/Multi-Process based on threadskv1 that replaces the linear sorted key array with a red/black tree.
+
+threadskv3.c	Multi-Threaded/Multi-Process based on threadskv1 that introduces librarian filler slots in the linear key array to minimize data movement when a new key is inserted into the middle of the array.
 
 Compilation is achieved on linux or Windows by:
 

@@ -1,7 +1,8 @@
-// btree version threadskv1 sched_yield version
+// btree version threadskv3 sched_yield version
 //	with reworked bt_deletekey code
 //	and phase-fair reader writer lock
-// 12 MAR 2014
+//	and librarian page split code
+// 02 SEP 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -156,6 +157,7 @@ typedef struct {
 
 typedef struct {
 	uint off:BT_maxbits;		// page offset for key start
+	uint librarian:1;			// set for librarian slot
 	uint dead:1;				// set for deleted key
 } BtSlot;
 
@@ -184,11 +186,11 @@ typedef struct BtPage_ {
 	uint cnt;					// count of keys in page
 	uint act;					// count of active keys
 	uint min;					// next key offset
+	uint garbage;				// page garbage in bytes
 	unsigned char bits:7;		// page size in bits
 	unsigned char free:1;		// page is on free chain
-	unsigned char lvl:6;		// level of page
+	unsigned char lvl:7;		// level of page
 	unsigned char kill:1;		// page is being deleted
-	unsigned char dirty:1;		// page has deleted keys
 	unsigned char right[BtId];	// page number to right
 } *BtPage;
 
@@ -1568,14 +1570,14 @@ unsigned char leftkey[256], rightkey[256];
 unsigned char value[BtId];
 uid page_no;
 BtKey ptr;
+BtVal val;
 
 	//	remove the old fence value
 
 	ptr = keyptr(set->page, set->page->cnt);
 	memcpy (rightkey, ptr, ptr->len + 1);
-
+	set->page->garbage += ptr->len + val->len + 2;
 	memset (slotptr(set->page, set->page->cnt--), 0, sizeof(BtSlot));
-	set->page->dirty = 1;
 
 	ptr = keyptr(set->page, set->page->cnt);
 	memcpy (leftkey, ptr, ptr->len + 1);
@@ -1648,12 +1650,18 @@ unsigned char lowerfence[256], higherfence[256];
 uint slot, idx, dirty = 0, fence, found;
 BtPageSet set[1], right[1];
 unsigned char value[BtId];
-BtKey ptr;
+BtKey ptr, tst;
+BtVal val;
 
 	if( slot = bt_loadpage (bt, set, key, len, lvl, BtLockWrite) )
 		ptr = keyptr(set->page, slot);
 	else
 		return bt->err;
+
+	// if librarian slot, advance to real slot
+
+	if( slotptr(set->page, slot)->librarian )
+		ptr = keyptr(set->page, ++slot);
 
 	//	are we deleting a fence slot?
 
@@ -1663,8 +1671,9 @@ BtKey ptr;
 
 	if( found = !keycmp (ptr, key, len) )
 	  if( found = slotptr(set->page, slot)->dead == 0 ) {
+		val = valptr(set->page,slot);
 		dirty = slotptr(set->page, slot)->dead = 1;
- 		set->page->dirty = 1;
+ 		set->page->garbage += ptr->len + val->len + 2;
  		set->page->act--;
 
 		// collapse empty slots
@@ -1787,6 +1796,11 @@ int ret;
 	else
 		return 0;
 
+	//	skip librarian slot place holder
+
+	if( slotptr(set->page, slot)->librarian )
+		ptr = keyptr(set->page, ++slot);
+
 	// if key exists, return >= 0 value bytes copied
 	//	otherwise return (-1)
 
@@ -1822,9 +1836,10 @@ BtVal val;
 	if( page->min >= (max+1) * sizeof(BtSlot) + sizeof(*page) + keylen + 1 + vallen + 1)
 		return slot;
 
-	//	skip cleanup if nothing to reclaim
+	//	skip cleanup and proceed to split
+	//	if there's not enough garbage
 
-	if( !page->dirty )
+	if( page->garbage + page->min < 2 * page->act * sizeof(BtSlot) + sizeof(*page) + nxt / 3 )
 		return 0;
 
 	memcpy (bt->frame, page, bt->mgr->page_size);
@@ -1832,15 +1847,15 @@ BtVal val;
 	// skip page info and set rest of page to zero
 
 	memset (page+1, 0, bt->mgr->page_size - sizeof(*page));
-	page->dirty = 0;
+	page->garbage = 0;
 	page->act = 0;
 
-	// try cleaning up page first
-	// by removing deleted keys
+	// clean up page first by
+	// removing deleted keys
 
 	while( cnt++ < max ) {
 		if( cnt == slot )
-			newslot = idx + 1;
+			newslot = idx + 2;
 		if( cnt < max && slotptr(bt->frame,cnt)->dead )
 			continue;
 
@@ -1856,6 +1871,12 @@ BtVal val;
 		nxt -= val->len + 1;
 		((unsigned char *)page)[nxt] = val->len;
 		memcpy ((unsigned char *)page + nxt + 1, val->value, val->len);
+
+		// make a librarian slot
+
+		slotptr(page, ++idx)->off = nxt;
+		slotptr(page, idx)->librarian = 1;
+		slotptr(page, idx)->dead = 1;
 
 		// set up the slot
 
@@ -1955,6 +1976,8 @@ BtVal val;
 	idx = 0;
 
 	while( cnt++ < max ) {
+		if( slotptr(set->page, cnt)->dead && cnt < max )
+			continue;
 		val = valptr(set->page, cnt);
 		nxt -= val->len + 1;
 		((unsigned char *)bt->frame)[nxt] = val->len;
@@ -1963,6 +1986,14 @@ BtVal val;
 		key = keyptr(set->page, cnt);
 		nxt -= key->len + 1;
 		memcpy ((unsigned char *)bt->frame + nxt, key, key->len + 1);
+
+		//	add librarian slot
+
+		slotptr(bt->frame, ++idx)->off = nxt;
+		slotptr(bt->frame, idx)->librarian = 1;
+		slotptr(bt->frame, idx)->dead = 1;
+
+		//  add actual slot
 
 		slotptr(bt->frame, ++idx)->off = nxt;
 
@@ -1994,14 +2025,20 @@ BtVal val;
 	memcpy (bt->frame, set->page, bt->mgr->page_size);
 	memset (set->page+1, 0, bt->mgr->page_size - sizeof(*set->page));
 	nxt = bt->mgr->page_size;
-	set->page->dirty = 0;
+	set->page->garbage = 0;
 	set->page->act = 0;
+	max /= 2;
 	cnt = 0;
 	idx = 0;
 
+	if( slotptr(bt->frame, max)->librarian )
+		max--;
+
 	//  assemble page of smaller keys
 
-	while( cnt++ < max / 2 ) {
+	while( cnt++ < max ) {
+		if( slotptr(bt->frame, cnt)->dead )
+			continue;
 		val = valptr(bt->frame, cnt);
 		nxt -= val->len + 1;
 		((unsigned char *)set->page)[nxt] = val->len;
@@ -2010,6 +2047,15 @@ BtVal val;
 		key = keyptr(bt->frame, cnt);
 		nxt -= key->len + 1;
 		memcpy ((unsigned char *)set->page + nxt, key, key->len + 1);
+
+		//	add librarian slot
+
+		slotptr(set->page, ++idx)->off = nxt;
+		slotptr(set->page, idx)->librarian = 1;
+		slotptr(set->page, idx)->dead = 1;
+
+		//	add actual slot
+
 		slotptr(set->page, ++idx)->off = nxt;
 		set->page->act++;
 	}
@@ -2065,17 +2111,23 @@ BtPageSet set[1];
 uint slot, idx;
 uint reuse;
 BtKey ptr;
+BtKey tst;
 BtVal val;
 
 	while( 1 ) {
 		if( slot = bt_loadpage (bt, set, key, keylen, lvl, BtLockWrite) )
 			ptr = keyptr(set->page, slot);
-		else
-		{
+		else {
 			if( !bt->err )
 				bt->err = BTERR_ovflw;
 			return bt->err;
 		}
+
+		// if librarian slot == found slot, advance to real slot
+
+		if( slotptr(set->page, slot)->librarian )
+		  if( !keycmp (ptr, key, keylen) )
+			ptr = keyptr(set->page, ++slot);
 
 		// if key already exists, update value and return
 
@@ -2083,6 +2135,7 @@ BtVal val;
 		  if( val = valptr(set->page, slot), val->len >= vallen ) {
 			if( slotptr(set->page, slot)->dead )
 				set->page->act++;
+			set->page->garbage += val->len - vallen;
 			slotptr(set->page, slot)->dead = 0;
 			val->len = vallen;
 			memcpy (val->value, value, vallen);
@@ -2091,11 +2144,19 @@ BtVal val;
 			bt_unpinpool (set->pool);
 			return 0;
 		  } else {
-			if( !slotptr(set->page, slot)->dead )
+			if( !slotptr(set->page, slot)->dead ) {
+				set->page->garbage += val->len + ptr->len + 2;
 				set->page->act--;
+			}
 			slotptr(set->page, slot)->dead = 1;
-			set->page->dirty = 1;
 		  }
+
+		//	if found slot > desired slot and previous slot
+		//	is a librarian slot, use it
+
+		if( !reuse && slot > 1 )
+		  if( slotptr(set->page, slot-1)->librarian )
+			slot--;
 
 		// check if page has enough space
 
@@ -2131,6 +2192,7 @@ BtVal val;
 		*slotptr(set->page, idx) = *slotptr(set->page, idx -1), idx--;
 
 	slotptr(set->page, slot)->off = set->page->min;
+	slotptr(set->page, slot)->librarian = 0;
 	slotptr(set->page, slot)->dead = 0;
 
 	bt_unlockpage (BtLockWrite, set->latch);
@@ -2453,8 +2515,6 @@ FILE *in;
 			  else if( args->num )
 		  		sprintf((char *)key+len, "%.9d", line + args->idx * args->num), len += 9;
 
-			  if( (args->type[1] | 0x20) == 'p' )
-				len = 10;
 			  if( bt_deletekey (bt, key, len, 0) )
 				fprintf(stderr, "Error %d Line: %d\n", bt->err, line), exit(0);
 			  len = 0;
@@ -2477,8 +2537,6 @@ FILE *in;
 			  else if( args->num )
 		  		sprintf((char *)key+len, "%.9d", line + args->idx * args->num), len += 9;
 
-			  if( (args->type[1] | 0x20) == 'p' )
-				len = 10;
 			  if( bt_findkey (bt, key, len, NULL, 0) == 0 )
 				found++;
 			  else if( bt->err )

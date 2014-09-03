@@ -1,7 +1,10 @@
-// btree version threadskv1 sched_yield version
+// btree version threadskv2 sched_yield version
 //	with reworked bt_deletekey code
-//	and phase-fair reader writer lock
-// 12 MAR 2014
+//	phase-fair reader writer lock
+//	generalized key-value interface
+//
+//	reworked btree node as red/black binomial tree
+// 27 AUG 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -34,7 +37,6 @@ REDISTRIBUTION OF THIS SOFTWARE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
-#include <sys/time.h>
 #include <sys/mman.h>
 #include <errno.h>
 #include <pthread.h>
@@ -43,7 +45,6 @@ REDISTRIBUTION OF THIS SOFTWARE.
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <fcntl.h>
 #include <process.h>
 #include <intrin.h>
@@ -71,6 +72,7 @@ typedef unsigned int		uint;
 #define BT_minpage		(1 << BT_minbits)	// minimum page size
 #define BT_maxpage		(1 << BT_maxbits)	// maximum page size
 
+#define BT_binomial		5					// number of levels to emit together
 /*
 There are five lock types for each node in three independent sets: 
 1. (set 1) AccessIntent: Sharable. Going to Read the node. Incompatible with NodeDelete. 
@@ -146,17 +148,16 @@ typedef struct {
 
 //	Page key slot definition.
 
-//	If BT_maxbits is 15 or less, you can save 2 bytes
-//	for each key stored by making the two uints
-//	into ushorts.
-
 //	Keys are marked dead, but remain on the page until
-//	it cleanup is called. The fence key (highest key) for
-//	the page is always present, even after cleanup.
+//	cleanup is called. The fence key (highest key) for
+//	a leaf page is always present, even after cleanup.
 
 typedef struct {
-	uint off:BT_maxbits;		// page offset for key start
-	uint dead:1;				// set for deleted key
+	uint off:BT_maxbits;	// page offset for key start
+	uint fence:1;			// is tree node the fence key?
+	uint red:1;				// is tree node red?
+	uint dead:1;			// set for deleted key
+	uint left, right;		// next nodes down
 } BtSlot;
 
 //	The key structure occupies space at the upper end of
@@ -184,6 +185,7 @@ typedef struct BtPage_ {
 	uint cnt;					// count of keys in page
 	uint act;					// count of active keys
 	uint min;					// next key offset
+	uint root;					// slot of root node
 	unsigned char bits:7;		// page size in bits
 	unsigned char free:1;		// page is on free chain
 	unsigned char lvl:6;		// level of page
@@ -258,13 +260,28 @@ typedef struct {
 #endif
 } BtMgr;
 
+//	red-black tree descent stack
+
+typedef struct {
+	uint slot:BT_maxbits;
+	int cmp:2;			// comparison result
+} BtPathEntry;
+
+typedef struct {
+	int lvl;			// height of the stack
+	int ge;				// last node that is >= given node
+	BtPathEntry entry[BT_maxbits+2];	// stacked tree descent
+} BtPathStk;
+
 typedef struct {
 	BtMgr *mgr;			// buffer manager for thread
+	unsigned char *mem;	// frame, cursor, page memory buffer
+	BtPathStk path[1];	// cached frame path stack for begin/next
 	BtPage cursor;		// cached frame for start/next (never mapped)
 	BtPage frame;		// spare frame for the page split (never mapped)
-	uid cursor_page;	// current cursor page number	
-	unsigned char *mem;	// frame, cursor, page memory buffer
+	uint *que;			// binomial key distribution buffer
 	int found;			// last delete or insert was found
+	int base;			// maximum binomial assignment
 	int err;			// last error
 } BtDb;
 
@@ -281,15 +298,18 @@ typedef enum {
 // B-Tree functions
 extern void bt_close (BtDb *bt);
 extern BtDb *bt_open (BtMgr *mgr);
-extern BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uint lvl, void *value, uint vallen);
-extern BTERR  bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl);
+extern BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint len, uint lvl, void *value, uint vallen, uint stopper);
+extern BTERR  bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl, uint stopper);
 extern int bt_findkey    (BtDb *bt, unsigned char *key, uint keylen, unsigned char *value, uint vallen);
 extern uint bt_startkey  (BtDb *bt, unsigned char *key, uint len);
-extern uint bt_nextkey   (BtDb *bt, uint slot);
+extern uint bt_nextkey   (BtDb *bt);
 
 //	manager functions
 extern BtMgr *bt_mgr (char *name, uint mode, uint bits, uint poolsize, uint segsize, uint hashsize);
 void bt_mgrclose (BtMgr *mgr);
+
+//	forward definitions
+uint bt_rbremovefence (BtPage page, uint slot, BtPathStk *path);
 
 //  Helper functions to return slot values
 //	from the cursor page.
@@ -309,7 +329,8 @@ extern BtVal bt_val (BtDb *bt, uint slot);
 
 //  The page is allocated from low and hi ends.
 //  The key slots are allocated from the bottom,
-//	while the text and value of the key
+//	and are organized into a balanced binary tree.
+//	The text and value of the key
 //  are allocated from the top.  When the two
 //  areas meet, the page is split into two.
 
@@ -946,6 +967,9 @@ SYSTEM_INFO sysinfo[1];
 
 	for( lvl=MIN_lvl; lvl--; ) {
 		slotptr(latchmgr->alloc, 1)->off = mgr->page_size - 3 - (lvl ? BtId + 1: 1);
+		slotptr(latchmgr->alloc, 1)->fence = 1;
+		if( !lvl )
+			slotptr(latchmgr->alloc, 1)->dead = 1;
 		key = keyptr(latchmgr->alloc, 1);
 		key->len = 2;		// create stopper key
 		key->key[0] = 0xff;
@@ -957,6 +981,7 @@ SYSTEM_INFO sysinfo[1];
 		memcpy (val->value, value, val->len);
 
 		latchmgr->alloc->min = slotptr(latchmgr->alloc, 1)->off;
+		latchmgr->alloc->root = 1;
 		latchmgr->alloc->lvl = lvl;
 		latchmgr->alloc->cnt = 1;
 		latchmgr->alloc->act = 1;
@@ -1037,17 +1062,20 @@ BtDb *bt = malloc (sizeof(*bt));
 	memset (bt, 0, sizeof(*bt));
 	bt->mgr = mgr;
 #ifdef unix
-	bt->mem = malloc (2 *mgr->page_size);
+	bt->mem = malloc (3 *mgr->page_size);
 #else
-	bt->mem = VirtualAlloc(NULL, 2 * mgr->page_size, MEM_COMMIT, PAGE_READWRITE);
+	bt->mem = VirtualAlloc(NULL, 3 * mgr->page_size, MEM_COMMIT, PAGE_READWRITE);
 #endif
 	bt->frame = (BtPage)bt->mem;
 	bt->cursor = (BtPage)(bt->mem + 1 * mgr->page_size);
+	bt->que = (uint *)(bt->mem + 2 * mgr->page_size);
 	return bt;
 }
 
 //  compare two keys, returning > 0, = 0, or < 0
 //  as the comparison value
+//	-1 -> go right
+//	1 -> go left
 
 int keycmp (BtKey key1, unsigned char *key2, uint len2)
 {
@@ -1055,7 +1083,7 @@ uint len1 = key1->len;
 int ans;
 
 	if( ans = memcmp (key1->key, key2, len1 > len2 ? len2 : len1) )
-		return ans;
+		return ans > 0 ? 1 : -1;
 
 	if( len1 > len2 )
 		return 1;
@@ -1136,7 +1164,7 @@ int flag;
 		return bt->err = BTERR_map;
 
 	flag = ( bt->mgr->mode == BT_ro ? FILE_MAP_READ : FILE_MAP_WRITE );
-	pool->map = MapViewOfFile(pool->hmap, flag, (DWORD)(off >> 32), (DWORD)off, (uid)(bt->mgr->poolmask+1) << bt->mgr->page_bits);
+	pool->map = MapViewOfFile(pool->hmap, flag, (DWORD)(off >> 32), (DWORD)off, (bt->mgr->poolmask+1) << bt->mgr->page_bits);
 	if( !pool->map )
 		return bt->err = BTERR_map;
 #endif
@@ -1398,41 +1426,74 @@ int blk;
 
 //  find slot in page for given key at a given level
 
-int bt_findslot (BtPageSet *set, unsigned char *key, uint len)
+uint bt_findslot (BtPage page, BtPage src, unsigned char *key, uint len, BtPathStk *path, uint stopper)
 {
-uint diff, higher = set->page->cnt, low = 1, slot;
-uint good = 0;
+BtSlot *node;
+uint slot;
 
-	//	  make stopper key an infinite fence value
+  path->lvl = -1;
+  path->ge = -1;
 
-	if( bt_getid (set->page->right) )
-		higher++;
+  if( slot = page->root ) do {
+	path->entry[++path->lvl].slot = slot;
+	node = slotptr(page,slot);
+
+	if( node->fence && !bt_getid(page->right) && stopper )
+	  path->entry[path->lvl].cmp = 0;
+	else if( node->fence && !bt_getid(page->right) )
+	  path->entry[path->lvl].cmp = 1;
+	else if( stopper )
+	  path->entry[path->lvl].cmp = -1;
 	else
-		good++;
+	  path->entry[path->lvl].cmp = keycmp (keyptr(src, slot), key, len);
 
-	//	low is the lowest candidate.
-	//  loop ends when they meet
+	if( path->entry[path->lvl].cmp == 0 )
+		return path->ge = path->lvl, slot;
 
-	//  higher is already
-	//	tested as .ge. the passed key.
+	if( path->entry[path->lvl].cmp > 0 )
+		path->ge = path->lvl, slot = node->left;
+	else
+		slot = node->right;
+  } while( slot && path->lvl < BT_maxbits );
+  else
+	return 0;
 
-	while( diff = higher - low ) {
-		slot = low + ( diff >> 1 );
-		if( keycmp (keyptr(set->page, slot), key, len) < 0 )
-			low = slot + 1;
-		else
-			higher = slot, good++;
+  return path->entry[path->lvl].slot;
+}
+
+// return next slot on the page using the path stack
+
+uint bt_nextslot (BtPage page, BtPathStk *path)
+{
+uint slot, next;
+BtSlot *node;
+
+	slot = path->entry[path->lvl].slot;
+	node = slotptr(page,slot);
+
+	if( slot = node->right ) {
+	  path->entry[path->lvl++].cmp = -1;
+	  path->entry[path->lvl].slot = slot;
+
+	  while( slot = slotptr(page,slot)->left ) {
+		path->entry[path->lvl++].cmp = 1;
+		path->entry[path->lvl].slot = slot;
+	  }
+
+	  return path->entry[path->lvl].slot;
 	}
 
-	//	return zero if key is on right link page
+	while( path->lvl )
+	  if( path->entry[--path->lvl].cmp > 0 )
+		return path->entry[path->lvl].slot;
 
-	return good ? higher : 0;
+	return 0;
 }
 
 //  find and load page at given level for given key
 //	leave page rd or wr locked as requested
 
-int bt_loadpage (BtDb *bt, BtPageSet *set, unsigned char *key, uint len, uint lvl, BtLock lock)
+int bt_loadpage (BtDb *bt, BtPageSet *set, unsigned char *key, uint len, uint lvl, BtLock lock, BtPathStk *path, uint stopper)
 {
 uid page_no = ROOT_page, prevpage = 0;
 uint drill = 0xff, slot;
@@ -1504,21 +1565,29 @@ BtPool *prevpool;
 	//  find key on page at this level
 	//  and descend to requested level
 
-	if( !set->page->kill )
-	 if( slot = bt_findslot (set, key, len) ) {
-	  if( drill == lvl )
-		return slot;
+	if( set->page->kill )
+	  goto slideright;
 
-	  while( slotptr(set->page, slot)->dead )
-		if( slot++ < set->page->cnt )
-			continue;
-		else
-			goto slideright;
+	slot = bt_findslot (set->page, set->page, key, len, path, stopper);
 
-	  page_no = bt_getid(valptr(set->page, slot)->value);
-	  drill--;
-	  continue;
-	 }
+	if( path->ge < 0 )
+	  goto slideright;
+
+	if( drill == lvl )
+	  return slot;
+
+	slot = path->entry[path->ge].slot;
+	path->lvl = path->ge;
+
+	while( slotptr(set->page, slot)->dead )
+	  if( slot = bt_nextslot (set->page, path) )
+		continue;
+	  else
+		goto slideright;
+
+	page_no = bt_getid(valptr(set->page, slot)->value);
+	drill--;
+	continue;
 
 	//  or slide right into next page
 
@@ -1560,24 +1629,35 @@ void bt_freepage (BtDb *bt, BtPageSet *set)
 }
 
 //	a fence key was deleted from a page
-//	push new fence value upwards
+//	push new fence value upwards in the btree
 
 BTERR bt_fixfence (BtDb *bt, BtPageSet *set, uint lvl)
 {
 unsigned char leftkey[256], rightkey[256];
 unsigned char value[BtId];
+BtPathStk path[1];
+uint slot, fence;
 uid page_no;
 BtKey ptr;
 
 	//	remove the old fence value
 
-	ptr = keyptr(set->page, set->page->cnt);
+	fence = set->page->root;
+	slot = set->page->root;
+	path->lvl = -1;
+
+	do path->entry[++path->lvl].slot = fence = slot;
+	while( slot = slotptr(set->page,slot)->right );
+
+	ptr = keyptr(set->page, fence);
 	memcpy (rightkey, ptr, ptr->len + 1);
 
-	memset (slotptr(set->page, set->page->cnt--), 0, sizeof(BtSlot));
+	do fence = bt_rbremovefence (set->page, fence, path);
+	while( slotptr(set->page,fence)->dead );
+
 	set->page->dirty = 1;
 
-	ptr = keyptr(set->page, set->page->cnt);
+	ptr = keyptr(set->page, fence);
 	memcpy (leftkey, ptr, ptr->len + 1);
 	page_no = set->page_no;
 
@@ -1588,12 +1668,12 @@ BtKey ptr;
 
 	bt_putid (value, page_no);
 
-	if( bt_insertkey (bt, leftkey+1, *leftkey, lvl+1, value, BtId) )
+	if( bt_insertkey (bt, leftkey+1, *leftkey, lvl+1, value, BtId, 0) )
 	  return bt->err;
 
 	//	now delete old fence key
 
-	if( bt_deletekey (bt, rightkey+1, *rightkey, lvl+1) )
+	if( bt_deletekey (bt, rightkey+1, *rightkey, lvl+1, !bt_getid (set->page->right)) )
 		return bt->err;
 
 	bt_unlockpage (BtLockParent, set->latch);
@@ -1608,16 +1688,13 @@ BtKey ptr;
 BTERR bt_collapseroot (BtDb *bt, BtPageSet *root)
 {
 BtPageSet child[1];
-uint idx;
+uint slot;
 
   // find the child entry and promote as new root contents
 
   do {
-	for( idx = 0; idx++ < root->page->cnt; )
-	  if( !slotptr(root->page, idx)->dead )
-		break;
-
-	child->page_no = bt_getid (valptr(root->page, idx)->value);
+	slot = root->page->root;
+	child->page_no = bt_getid (valptr(root->page, slot)->value);
 
 	child->latch = bt_pinlatch (bt, child->page_no);
 	bt_lockpage (BtLockDelete, child->latch);
@@ -1642,44 +1719,35 @@ uint idx;
 //  find and delete key on page by marking delete flag bit
 //  if page becomes empty, delete it from the btree
 
-BTERR bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl)
+BTERR bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl, uint stopper)
 {
 unsigned char lowerfence[256], higherfence[256];
 uint slot, idx, dirty = 0, fence, found;
 BtPageSet set[1], right[1];
 unsigned char value[BtId];
+BtPathStk path[1];
+BtSlot *node;
 BtKey ptr;
+BtVal val;
 
-	if( slot = bt_loadpage (bt, set, key, len, lvl, BtLockWrite) )
-		ptr = keyptr(set->page, slot);
+	if( slot = bt_loadpage (bt, set, key, len, lvl, BtLockWrite, path, stopper) )
+		node = slotptr(set->page, slot);
 	else
 		return bt->err;
 
-	//	are we deleting a fence slot?
-
-	fence = slot == set->page->cnt;
-
 	// if key is found delete it, otherwise ignore request
 
-	if( found = !keycmp (ptr, key, len) )
-	  if( found = slotptr(set->page, slot)->dead == 0 ) {
-		dirty = slotptr(set->page, slot)->dead = 1;
+	if( found = !path->entry[path->lvl].cmp )
+	  if( found = node->dead == 0 ) {
+		dirty = node->dead = 1;
  		set->page->dirty = 1;
  		set->page->act--;
-
-		// collapse empty slots
-
-		while( idx = set->page->cnt - 1 )
-		  if( slotptr(set->page, idx)->dead ) {
-			*slotptr(set->page, idx) = *slotptr(set->page, idx + 1);
-			memset (slotptr(set->page, set->page->cnt--), 0, sizeof(BtSlot));
-		  } else
-			break;
 	  }
 
 	//	did we delete a fence key in an upper level?
 
-	if( dirty && lvl && set->page->act && fence )
+	if( lvl && node->fence )
+	 if( dirty && set->page->act )
 	  if( bt_fixfence (bt, set, lvl) )
 		return bt->err;
 	  else
@@ -1705,7 +1773,13 @@ BtKey ptr;
 	//	cache copy of fence key
 	//	to post in parent
 
-	ptr = keyptr(set->page, set->page->cnt);
+	fence = set->page->root;
+	slot = set->page->root;
+
+	while( slot = slotptr(set->page,slot)->right )
+		fence = slot;
+
+	ptr = keyptr(set->page, fence);
 	memcpy (lowerfence, ptr, ptr->len + 1);
 
 	//	obtain lock on right page
@@ -1730,7 +1804,13 @@ BtKey ptr;
 
 	// cache copy of key to update
 
-	ptr = keyptr(right->page, right->page->cnt);
+	fence = set->page->root;
+	slot = set->page->root;
+
+	while( slot = slotptr(set->page,slot)->right )
+		fence = slot;
+
+	ptr = keyptr(right->page, fence);
 	memcpy (higherfence, ptr, ptr->len + 1);
 
 	// mark right page deleted and point it to left page
@@ -1747,14 +1827,15 @@ BtKey ptr;
 
 	// redirect higher key directly to our new node contents
 
+	stopper = !bt_getid (set->page->right);
 	bt_putid (value, set->page_no);
 
-	if( bt_insertkey (bt, higherfence+1, *higherfence, lvl+1, value, BtId) )
+	if( bt_insertkey (bt, higherfence+1, *higherfence, lvl+1, value, BtId, stopper) )
 	  return bt->err;
 
 	//	delete old lower key to our node
 
-	if( bt_deletekey (bt, lowerfence+1, *lowerfence, lvl+1) )
+	if( bt_deletekey (bt, lowerfence+1, *lowerfence, lvl+1, 0) )
 	  return bt->err;
 
 	//	obtain delete and write locks to right node
@@ -1777,20 +1858,19 @@ BtKey ptr;
 int bt_findkey (BtDb *bt, unsigned char *key, uint keylen, unsigned char *value, uint valmax)
 {
 BtPageSet set[1];
+BtPathStk path[1];
 uint  slot;
 BtKey ptr;
 BtVal val;
 int ret;
 
-	if( slot = bt_loadpage (bt, set, key, keylen, 0, BtLockRead) )
-		ptr = keyptr(set->page, slot);
-	else
-		return 0;
+	if( !(slot = bt_loadpage (bt, set, key, keylen, 0, BtLockRead, path, 0)) )
+		return -1;
 
-	// if key exists, return >= 0 value bytes copied
-	//	otherwise return (-1)
+	// if key exists, return TRUE
+	//	otherwise return FALSE
 
-	if( !slotptr(set->page, slot)->dead && !keycmp (ptr, key, keylen) ) {
+	if( !slotptr(set->page, slot)->dead && !path->entry[path->lvl].cmp ) {
 		val = valptr (set->page,slot);
 		if( valmax > val->len )
 			valmax = val->len;
@@ -1805,22 +1885,321 @@ int ret;
 	return ret;
 }
 
-//	check page for space available,
-//	clean if necessary and return
-//	0 - page needs splitting
-//	>0  new slot value
+//	left rotate parent node
 
-uint bt_cleanpage(BtDb *bt, BtPage page, uint keylen, uint slot, uint vallen)
+void bt_leftrotate (BtPage page, uint slot, BtSlot *parent, int cmp)
 {
-uint nxt = bt->mgr->page_size;
-uint cnt = 0, idx = 0;
+BtSlot *x = slotptr(page,slot);
+uint right = x->right;
+BtSlot *y = slotptr(page,right);
+
+	x->right = y->left;
+
+	if( !parent ) //	is x the root node?
+		page->root = right;
+	else if( cmp == 1 )
+		parent->left = right;
+	else
+		parent->right = right;
+
+	y->left = slot;
+}
+
+//	right rotate parent node
+
+void bt_rightrotate (BtPage page, uint slot, BtSlot *parent, int cmp)
+{
+BtSlot *x = slotptr(page,slot);
+uint left = x->left;
+BtSlot *y = slotptr(page,left);
+
+	x->left = y->right;
+
+	if( !parent ) //	is y the root node?
+		page->root = left;
+	else if( cmp == 1 )
+		parent->left = left;
+	else
+		parent->right = left;
+
+	y->right = slot;
+}
+
+//	delete fence slot from rbtree at path point
+//	return with new fence slot
+
+uint bt_rbremovefence (BtPage page, uint slot, BtPathStk *path)
+{
+BtSlot *node = slotptr (page,slot), *parent, *sibling, *grand;
+uint red = node->red, lvl, fence, idx, left;
+
+	if( lvl =  path->lvl ) {
+		parent = slotptr(page,path->entry[lvl - 1].slot);
+		parent->right = node->left;
+	} else
+		page->root = node->left;
+
+	if( fence = node->left )
+		node = slotptr(page,fence);
+	else {
+		parent->fence = 1;
+		return path->entry[--path->lvl].slot;
+	}
+
+	//  extend path to new fence
+
+	path->entry[page->lvl].slot = fence;
+
+	while( slot = slotptr(page, fence)->right )
+		path->entry[++page->lvl].slot = fence = slot;
+
+	slotptr(page,fence)->fence = 1;
+
+	//	fixup colors
+
+	if( !red )
+	 while( !node->red && lvl ) {
+		left = parent->left;
+		sibling = slotptr(page,left);
+		if( sibling->red ) {
+		  sibling->red = 0;
+		  parent->red = 1;
+		  if( lvl > 1 )
+		  	grand = slotptr(page,path->entry[lvl-2].slot);
+		  else
+			grand = NULL;
+		  bt_rightrotate(page, path->entry[lvl-1].slot, grand, -1);
+		  sibling = slotptr(page,parent->left);
+
+		  for( idx = ++path->lvl; idx > lvl - 1; idx-- )
+			path->entry[idx].slot = path->entry[idx-1].slot;
+
+		  path->entry[idx].slot = left; 
+		}
+
+		if( !sibling->right || !slotptr(page,sibling->right)->red )
+		  if( !sibling->left || !slotptr(page,sibling->left)->red ) {
+			sibling->red = 1;
+			node = parent;
+			parent = grand;
+			lvl--;
+			continue;
+		  }
+
+		if( !sibling->left || !slotptr(page,sibling->left)->red ) {
+			if( sibling->right )
+			  slotptr(page,sibling->right)->red = 0;
+
+			sibling->red = 1;
+			bt_leftrotate (page, parent->left, parent, 1);
+			sibling = slotptr(page,parent->left);
+		}
+
+		slotptr(page, sibling->left)->red = 0;
+		sibling->red = parent->red;
+		parent->red = 0;
+		bt_rightrotate(page, path->entry[lvl-1].slot, grand, -1);
+		break;
+	 }
+
+	slotptr(page,page->root)->red = 0;
+	return fence;
+}
+
+//	insert slot into rbtree at path point
+
+void bt_rbinsert (BtPage page, uint slot, BtPathStk *path)
+{
+BtSlot *parent = slotptr(page,path->entry[path->lvl].slot);
+BtSlot *uncle, *grand;
+int lvl = path->lvl;
+
+	if( path->entry[lvl].cmp == 1 )
+		parent->left = slot;
+	else
+		parent->right = slot;
+
+	slotptr(page,slot)->red = 1;
+
+	while( lvl > 0 && parent->red ) {
+	  grand = slotptr(page,path->entry[lvl-1].slot);
+
+	  if( path->entry[lvl-1].cmp == 1 ) { // was grandparent left followed?
+		uncle = slotptr(page,grand->right);
+		if( grand->right && uncle->red ) {
+		  parent->red = 0;
+		  uncle->red = 0;
+		  grand->red = 1;
+
+		  // move to grandparent & its parent (if any)
+
+	  	  slot = path->entry[--lvl].slot;
+		  if( !lvl )
+			break;
+	  	  parent = slotptr(page,path->entry[--lvl].slot);
+		  continue;
+		}
+
+		// was the parent right link followed?
+		// if so, left rotate parent
+
+	  	if( path->entry[lvl].cmp == -1 ) {
+		  bt_leftrotate(page, path->entry[lvl].slot, grand, path->entry[lvl-1].cmp);
+		  parent = slotptr(page,slot);	// slot was rotated to parent
+		}
+
+		parent->red = 0;
+		grand->red = 1;
+
+		//	get pointer to grandparent's parent
+
+		if( lvl>1 )
+	    	grand = slotptr(page,path->entry[lvl-2].slot);
+		else
+			grand = NULL;
+
+		//  right rotate the grandparent slot
+
+		slot = path->entry[lvl-1].slot;
+		bt_rightrotate(page, slot, grand, path->entry[lvl-2].cmp);
+		return;
+	  } else {	// symmetrical case
+		uncle = slotptr(page,grand->left);
+		if( grand->left && uncle->red ) {
+		  uncle->red = 0;
+		  parent->red = 0;
+		  grand->red = 1;
+
+		  // move to grandparent & its parent (if any)
+	  	  slot = path->entry[--lvl].slot;
+		  if( !lvl )
+			break;
+	  	  parent = slotptr(page,path->entry[--lvl].slot);
+		  continue;
+		}
+
+		// was the parent left link followed?
+		// if so, right rotate parent
+
+	  	if( path->entry[lvl].cmp == 1 ) {
+		  bt_rightrotate(page, path->entry[lvl].slot, grand, path->entry[lvl-1].cmp);
+		  parent = slotptr(page,slot);	// slot was rotated to parent
+		}
+
+		parent->red = 0;
+		grand->red = 1;
+
+		//	get pointer to grandparent's parent
+
+		if( lvl>1 )
+	    	grand = slotptr(page,path->entry[lvl-2].slot);
+		else
+			grand = NULL;
+
+		//  left rotate the grandparent slot
+
+		slot = path->entry[lvl-1].slot;
+		bt_leftrotate(page, slot, grand, path->entry[lvl-2].cmp);
+		return;
+	  }
+	}
+
+	//	reset root color
+
+	slotptr(page,page->root)->red = 0;
+}
+
+//	transfer a slot from one page to another
+
+void bt_xfrslot (BtPage page, BtPage src, uint slot, BtPathStk *path, uint copykey)
+{
+BtKey key = keyptr(src,slot);
+BtVal val = valptr(src,slot);
+BtSlot *node;
+
+	// calculate next available slot and copy key into page
+
+  if( copykey ) {
+	page->min -= val->len + 1; // reset lowest used offset
+	((unsigned char *)page)[page->min] = val->len;
+	memcpy ((unsigned char *)page + page->min +1, val->value, val->len );
+
+	page->min -= key->len + 1; // reset lowest used offset
+	((unsigned char *)page)[page->min] = key->len;
+	memcpy ((unsigned char *)page + page->min +1, key->key, key->len );
+  }
+
+  node = slotptr(page, ++page->cnt);
+  node->off = copykey ? page->min : slotptr(src,slot)->off;
+  node->fence = slotptr(src,slot)->fence;
+  node->dead = slotptr(src,slot)->dead;
+
+  page->act++;
+  
+  if( path->lvl < 0 ) {
+  	page->root = page->cnt;
+  	return;
+  }
+
+  bt_rbinsert (page, page->cnt, path);
+}
+
+//	copy keys across into a binomial tree
+
+void bt_copykeys (BtPage page, uint slot, BtPage frame, uint *que, int lvl)
+{
+BtSlot *node = slotptr(page,slot);
+BtKey key = ((BtKey)((unsigned char*)(frame) + node->off));
+BtVal val = ((BtVal)(key->key + key->len));
+uint off, nxt = page->min;
+uint right = node->right;
+uint left = node->left;
+
+	// copy value
+
+	nxt -= val->len + 1;
+	((unsigned char *)page)[nxt] = val->len;
+	memcpy ((unsigned char *)page + nxt + 1, val->value, val->len);
+
+	//	copy key
+
+	nxt -= key->len + 1;
+	memcpy ((unsigned char *)page + nxt, key, key->len + 1);
+	node->off = nxt;
+	page->min = nxt;
+
+	//	punt if group of keys has filled a 4K VM block
+	//	which we determine by the number of red/black
+	//	levels have been copied across.
+
+	if( lvl > BT_binomial ) {
+	  if( left )
+		que[++(*que)] = left;
+	  if( right )
+		que[++(*que)] = right;
+	  return;
+	}
+
+	if( left )
+	  bt_copykeys (page, left, frame, que, lvl+1);
+
+	if( right )
+	  bt_copykeys (page, right, frame, que, lvl+1);
+}
+
+//	clean page and rebuild red-black tree
+//	return 0 - page needs splitting
+//	>0  cleanup done, try again
+
+uint bt_cleanpage(BtDb *bt, BtPage page, uint keylen, uint vallen)
+{
 uint max = page->cnt;
-uint newslot = max;
+BtPathStk path[1];
+uint cnt, slot;
+BtSlot *node;
+uid right;
 BtKey key;
 BtVal val;
-
-	if( page->min >= (max+1) * sizeof(BtSlot) + sizeof(*page) + keylen + 1 + vallen + 1)
-		return slot;
 
 	//	skip cleanup if nothing to reclaim
 
@@ -1832,48 +2211,51 @@ BtVal val;
 	// skip page info and set rest of page to zero
 
 	memset (page+1, 0, bt->mgr->page_size - sizeof(*page));
+	page->min = bt->mgr->page_size;
 	page->dirty = 0;
+	page->root = 0;
+	page->cnt = 0;
 	page->act = 0;
 
 	// try cleaning up page first
 	// by removing deleted keys
+	//	from the heap
 
-	while( cnt++ < max ) {
-		if( cnt == slot )
-			newslot = idx + 1;
-		if( cnt < max && slotptr(bt->frame,cnt)->dead )
+	right = bt_getid (bt->frame->right);
+	slot = 0;
+
+	while( ++slot <= max ) {
+		node = slotptr(bt->frame,slot);
+
+		if( !node->off )
 			continue;
 
-		// copy the key across
+		if( page->lvl || !node->fence )
+		   if( node->dead )
+			continue;
 
-		key = keyptr(bt->frame, cnt);
-		nxt -= key->len + 1;
-		memcpy ((unsigned char *)page + nxt, key, key->len + 1);
+		// xfr the slot to the page b-heap using keys from bt->frame
 
-		// copy the value across
-
-		val = valptr(bt->frame, cnt);
-		nxt -= val->len + 1;
-		((unsigned char *)page)[nxt] = val->len;
-		memcpy ((unsigned char *)page + nxt + 1, val->value, val->len);
-
-		// set up the slot
-
-		slotptr(page, ++idx)->off = nxt;
-
-		if( !(slotptr(page, idx)->dead = slotptr(bt->frame, cnt)->dead) )
-			page->act++;
+		key = keyptr(bt->frame, slot);
+		bt_findslot (page, bt->frame, key->key, key->len, path, node->fence && !right);
+		bt_xfrslot (page, bt->frame, slot, path, 0);
 	}
 
-	page->min = nxt;
-	page->cnt = idx;
+	// now copy keys & values across from bt->frame to page
+	//	in blocks of BT_binomial tree levels
 
-	//	see if page has enough space now, or does it need splitting?
+	page->min = bt->mgr->page_size;
+	bt->que[1] = page->root;
+	*bt->que = 1;
+	cnt = 0;
 
-	if( page->min >= (idx+1) * sizeof(BtSlot) + sizeof(*page) + keylen + 1 + vallen + 1 )
-		return newslot;
+	do bt_copykeys (page, bt->que[++cnt], bt->frame, bt->que, 0);
+	while( cnt < *bt->que );
 
-	return 0;
+	if( page->min < (page->cnt+1) * sizeof(BtSlot) + sizeof(*page) + keylen + 1 + vallen + 1 )
+		return 0;
+
+	return 1;
 }
 
 // split the root and raise the height of the btree
@@ -1882,6 +2264,7 @@ BTERR bt_splitroot(BtDb *bt, BtPageSet *root, unsigned char *leftkey, uid page_n
 {
 uint nxt = bt->mgr->page_size;
 unsigned char value[BtId];
+BtSlot *node;
 uid left;
 
 	//  Obtain an empty page to use, and copy the current
@@ -1904,7 +2287,9 @@ uid left;
 
 	nxt -= *leftkey + 1;
 	memcpy ((unsigned char *)root->page + nxt, leftkey, *leftkey + 1);
-	slotptr(root->page, 1)->off = nxt;
+	node = slotptr(root->page, 1);
+	node->off = nxt;
+	node->red = 1;
 	
 	// insert stopper key on newroot page
 	// and increase the root height
@@ -1917,10 +2302,14 @@ uid left;
 	bt_putid (value, page_no2);
 	((unsigned char *)root->page)[nxt+3] = BtId;
 	memcpy ((unsigned char *)root->page + nxt + 4, value, BtId);
-	slotptr(root->page, 2)->off = nxt;
+	node = slotptr(root->page, 2);
+	node->fence = 1;
+	node->off = nxt;
+	node->left = 1;
 
 	bt_putid(root->page->right, 0);
 	root->page->min = nxt;		// reset lowest used offset and key count
+	root->page->root = 2;
 	root->page->cnt = 2;
 	root->page->act = 2;
 	root->page->lvl++;
@@ -1933,50 +2322,84 @@ uid left;
 	return 0;
 }
 
+//	copy sub-tree from one node to the root of another
+//	return slot number in destination
+
+uint bt_copysubtree (BtDb *bt, BtPage dest, BtPage src, uint idx, uint parent, uint off)
+{
+BtSlot *node = slotptr(src, idx);
+uint child, slot;
+
+	slot = parent * 2 + off;
+
+	if( slot > bt->base )
+		slot = ++dest->cnt;
+
+	*slotptr(dest, slot) = *node;
+	dest->act++;
+
+	if( child = node->left )
+	  child = bt_copysubtree (bt, dest, src, child, slot, 0);
+
+	slotptr(dest, slot)->left = child;
+
+	if( child = node->right )
+	  child = bt_copysubtree (bt, dest, src, child, slot, 1);
+
+	slotptr(dest, slot)->right = child;
+	return slot;
+}
+
 //  split already locked full node
 //	return unlocked.
 
 BTERR bt_splitpage (BtDb *bt, BtPageSet *set)
 {
-uint cnt = 0, idx = 0, max, nxt = bt->mgr->page_size;
 unsigned char fencekey[256], rightkey[256];
 unsigned char value[BtId];
 uint lvl = set->page->lvl;
+uint prev, fence, stopper;
 BtPageSet right[1];
-uint prev;
+BtPathStk path[1];
+uint cnt, slot;
+BtSlot *node;
 BtKey key;
 BtVal val;
 
 	//  split higher half of keys to bt->frame
 
+	slot = slotptr(set->page, set->page->root)->right;
 	memset (bt->frame, 0, bt->mgr->page_size);
-	max = set->page->cnt;
-	cnt = max / 2;
-	idx = 0;
+	bt->base = set->page->cnt / 2;
+	bt->frame->cnt = bt->base;
 
-	while( cnt++ < max ) {
-		val = valptr(set->page, cnt);
-		nxt -= val->len + 1;
-		((unsigned char *)bt->frame)[nxt] = val->len;
-		memcpy ((unsigned char *)bt->frame + nxt + 1, val->value, val->len);
+	bt->frame->root = bt_copysubtree (bt, bt->frame, set->page, slot, 0, 1);
+	bt->frame->lvl = set->page->lvl;
 
-		key = keyptr(set->page, cnt);
-		nxt -= key->len + 1;
-		memcpy ((unsigned char *)bt->frame + nxt, key, key->len + 1);
+	// now copy keys & values across from page to bt->frame
+	//	in blocks of BT_binomial tree levels
 
-		slotptr(bt->frame, ++idx)->off = nxt;
+	slotptr(bt->frame,bt->frame->root)->red = 0;
+	bt->frame->min = bt->mgr->page_size;
+	bt->que[1] = bt->frame->root;
+	*bt->que = 1;
+	cnt = 0;
 
-		if( !(slotptr(bt->frame, idx)->dead = slotptr(set->page, cnt)->dead) )
-			bt->frame->act++;
-	}
+	do bt_copykeys (bt->frame, bt->que[++cnt], set->page, bt->que, 0);
+	while( cnt < *bt->que );
 
 	// remember existing fence key for new page to the right
 
+	fence = set->page->root;
+	slot = set->page->root;
+
+	while( slot = slotptr(set->page,slot)->right )
+		fence = slot;
+
+	key = keyptr(set->page,fence);
 	memcpy (rightkey, key, key->len + 1);
 
 	bt->frame->bits = bt->mgr->page_bits;
-	bt->frame->min = nxt;
-	bt->frame->cnt = idx;
 	bt->frame->lvl = lvl;
 
 	// link right node
@@ -1984,7 +2407,9 @@ BtVal val;
 	if( set->page_no > ROOT_page )
 		memcpy (bt->frame->right, set->page->right, BtId);
 
-	//	get new free page and write higher keys to it.
+	stopper = !bt_getid (bt->frame->right);
+
+	//	get new free page and write higher keys in bt->frame to it.
 
 	if( !(right->page_no = bt_newpage(bt, bt->frame)) )
 		return bt->err;
@@ -1993,34 +2418,34 @@ BtVal val;
 
 	memcpy (bt->frame, set->page, bt->mgr->page_size);
 	memset (set->page+1, 0, bt->mgr->page_size - sizeof(*set->page));
-	nxt = bt->mgr->page_size;
+	slot = slotptr(bt->frame, bt->frame->root)->left;
+	set->page->cnt = bt->base;
 	set->page->dirty = 0;
 	set->page->act = 0;
+
+	//  assemble page of smaller keys in set->page
+
+	set->page->root = bt_copysubtree (bt, set->page, bt->frame, slot, 0, 1);
+	set->page->min = bt->mgr->page_size;
+
+	bt->que[1] = set->page->root;
+	*bt->que = 1;
 	cnt = 0;
-	idx = 0;
 
-	//  assemble page of smaller keys
-
-	while( cnt++ < max / 2 ) {
-		val = valptr(bt->frame, cnt);
-		nxt -= val->len + 1;
-		((unsigned char *)set->page)[nxt] = val->len;
-		memcpy ((unsigned char *)set->page + nxt + 1, val->value, val->len);
-
-		key = keyptr(bt->frame, cnt);
-		nxt -= key->len + 1;
-		memcpy ((unsigned char *)set->page + nxt, key, key->len + 1);
-		slotptr(set->page, ++idx)->off = nxt;
-		set->page->act++;
-	}
-
-	// remember fence key for smaller page
-
-	memcpy(fencekey, key, key->len + 1);
+	do bt_copykeys (set->page, bt->que[++cnt], bt->frame, bt->que, 0);
+	while( cnt < *bt->que );
 
 	bt_putid(set->page->right, right->page_no);
-	set->page->min = nxt;
-	set->page->cnt = idx;
+
+	//	translate old r/b root as new left fence
+
+	key = keyptr(bt->frame,bt->frame->root);
+	bt_findslot (set->page, set->page, key->key, key->len, path, 0);
+	bt_xfrslot (set->page, bt->frame, bt->frame->root, path, 1);
+
+	node = slotptr(set->page,set->page->cnt);
+	memcpy(fencekey, key, key->len + 1);
+	node->fence = 1;
 
 	// if current page is the root page, split it
 
@@ -2039,14 +2464,14 @@ BtVal val;
 
 	bt_putid (value, set->page_no);
 
-	if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, value, BtId) )
+	if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, value, BtId, 0) )
 		return bt->err;
 
 	// switch fence for right block of larger keys to new right page
 
 	bt_putid (value, right->page_no);
 
-	if( bt_insertkey (bt, rightkey+1, *rightkey, lvl+1, value, BtId) )
+	if( bt_insertkey (bt, rightkey+1, *rightkey, lvl+1, value, BtId, stopper) )
 		return bt->err;
 
 	bt_unlockpage (BtLockParent, set->latch);
@@ -2059,31 +2484,32 @@ BtVal val;
 }
 //  Insert new key into the btree at given level.
 
-BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint keylen, uint lvl, void *value, uint vallen)
+BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint keylen, uint lvl, void *value, uint vallen, uint stopper)
 {
+BtPathStk path[1];
 BtPageSet set[1];
 uint slot, idx;
+BtSlot *node;
 uint reuse;
 BtKey ptr;
 BtVal val;
 
 	while( 1 ) {
-		if( slot = bt_loadpage (bt, set, key, keylen, lvl, BtLockWrite) )
-			ptr = keyptr(set->page, slot);
-		else
-		{
+		if( slot = bt_loadpage (bt, set, key, keylen, lvl, BtLockWrite, path, stopper) )
+			node = slotptr(set->page, slot);
+		else {
 			if( !bt->err )
 				bt->err = BTERR_ovflw;
 			return bt->err;
 		}
 
-		// if key already exists, update value and return
+		// if key already exists, update id and return
 
-		if( reuse = !keycmp (ptr, key, keylen) )
+		if( reuse = !path->entry[path->lvl].cmp )
 		  if( val = valptr(set->page, slot), val->len >= vallen ) {
-			if( slotptr(set->page, slot)->dead )
+			if( node->dead )
 				set->page->act++;
-			slotptr(set->page, slot)->dead = 0;
+			node->dead = 0;
 			val->len = vallen;
 			memcpy (val->value, value, vallen);
 			bt_unlockpage(BtLockWrite, set->latch);
@@ -2091,16 +2517,23 @@ BtVal val;
 			bt_unpinpool (set->pool);
 			return 0;
 		  } else {
-			if( !slotptr(set->page, slot)->dead )
+			if( !node->dead )
 				set->page->act--;
-			slotptr(set->page, slot)->dead = 1;
 			set->page->dirty = 1;
+			node->dead = 1;
 		  }
 
 		// check if page has enough space
 
- 		if( slot = bt_cleanpage (bt, set->page, keylen, slot, vallen) )
+		if( set->page->min >= (set->page->cnt+1) * sizeof(BtSlot) + sizeof(*set->page) + keylen + 1 + vallen + 1)
 			break;
+
+ 		if( bt_cleanpage (bt, set->page, keylen, vallen) ) {
+			bt_unlockpage (BtLockWrite, set->latch);
+			bt_unpinlatch (set->latch);
+			bt_unpinpool (set->pool);
+			continue;	// find new slot number
+		}
 
 		if( bt_splitpage (bt, set) )
 			return bt->err;
@@ -2116,27 +2549,60 @@ BtVal val;
 	((unsigned char *)set->page)[set->page->min] = keylen;
 	memcpy ((unsigned char *)set->page + set->page->min +1, key, keylen );
 
-	for( idx = slot; idx < set->page->cnt; idx++ )
-	  if( slotptr(set->page, idx)->dead )
-		break;
-
-	// now insert key into array before slot
-
-	if( !reuse && idx == set->page->cnt )
-		idx++, set->page->cnt++;
-
 	set->page->act++;
 
-	while( idx > slot )
-		*slotptr(set->page, idx) = *slotptr(set->page, idx -1), idx--;
+	if( !reuse ) {
+		slot = ++set->page->cnt;
+		node = slotptr(set->page,slot);
+	}
 
-	slotptr(set->page, slot)->off = set->page->min;
-	slotptr(set->page, slot)->dead = 0;
+	node->off = set->page->min;
+	node->dead = 0;
+
+	if( !reuse )
+		bt_rbinsert (set->page, slot, path);
 
 	bt_unlockpage (BtLockWrite, set->latch);
 	bt_unpinlatch (set->latch);
 	bt_unpinpool (set->pool);
 	return 0;
+}
+
+BTERR bt_startpage (BtDb *bt, uid page_no)
+{
+BtPageSet set[1];
+BtSlot *node;
+uint slot;
+
+	if( set->pool = bt_pinpool (bt, page_no) )
+		set->page = bt_page (bt, set->pool, page_no);
+	else
+		return 0;
+
+	set->latch = bt_pinlatch (bt, page_no);
+    bt_lockpage(BtLockRead, set->latch);
+
+	memcpy (bt->cursor, set->page, bt->mgr->page_size);
+
+	bt_unlockpage(BtLockRead, set->latch);
+	bt_unpinlatch (set->latch);
+	bt_unpinpool (set->pool);
+
+	slot = bt->cursor->root;
+	bt->path->lvl = -1;
+
+	do {
+		bt->path->entry[++bt->path->lvl].slot = slot;
+		bt->path->entry[bt->path->lvl].cmp = 1;
+		slot = slotptr(bt->cursor, slot)->left;
+	} while( slot && bt->path->lvl < BT_maxbits );
+
+	slot =  bt->path->entry[bt->path->lvl].slot;
+
+	while( slot && slotptr(bt->cursor,slot)->dead )
+		slot = bt_nextkey (bt);
+
+	return slot;
 }
 
 //  cache page of keys into cursor and return starting slot for given key
@@ -2148,59 +2614,37 @@ uint slot;
 
 	// cache page for retrieval
 
-	if( slot = bt_loadpage (bt, set, key, len, 0, BtLockRead) )
+	if( slot = bt_loadpage (bt, set, key, len, 0, BtLockRead, bt->path, 0) )
 	  memcpy (bt->cursor, set->page, bt->mgr->page_size);
 	else
 	  return 0;
 
-	bt->cursor_page = set->page_no;
-
 	bt_unlockpage(BtLockRead, set->latch);
 	bt_unpinlatch (set->latch);
 	bt_unpinpool (set->pool);
+
+	while( bt->path->lvl && bt->path->entry[bt->path->lvl - 1].cmp < 0 )
+	  slot = bt->path->entry[--bt->path->lvl].slot;
+
 	return slot;
 }
 
 //  return next slot for cursor page
 //  or slide cursor right into next page
 
-uint bt_nextkey (BtDb *bt, uint slot)
+uint bt_nextkey (BtDb *bt)
 {
-BtPageSet set[1];
 uid right;
+uint slot;
 
-  do {
-	right = bt_getid(bt->cursor->right);
-
-	while( slot++ < bt->cursor->cnt )
-	  if( slotptr(bt->cursor,slot)->dead )
-		continue;
-	  else if( right || (slot < bt->cursor->cnt) ) // skip infinite stopper
-		return slot;
-	  else
-		break;
-
-	if( !right )
-		break;
-
-	bt->cursor_page = right;
-
-	if( set->pool = bt_pinpool (bt, right) )
-		set->page = bt_page (bt, set->pool, right);
+  while( slot = bt_nextslot (bt->cursor, bt->path) )
+	if( slotptr(bt->cursor,slot)->dead )
+	  continue;
 	else
-		return 0;
+	  return slot;
 
-	set->latch = bt_pinlatch (bt, right);
-    bt_lockpage(BtLockRead, set->latch);
-
-	memcpy (bt->cursor, set->page, bt->mgr->page_size);
-
-	bt_unlockpage(BtLockRead, set->latch);
-	bt_unpinlatch (set->latch);
-	bt_unpinpool (set->pool);
-	slot = 0;
-
-  } while( 1 );
+  if( right = bt_getid(bt->cursor->right) )
+	return bt_startpage (bt, right);
 
   return bt->err = 0;
 }
@@ -2347,15 +2791,10 @@ BtKey ptr;
 		  if( *amt <  bt->mgr->page_size )
 			fprintf(stderr, "page %.8x unable to read\n", page_no);
 #endif
-		if( !bt->frame->free ) {
-		 for( idx = 0; idx++ < bt->frame->cnt - 1; ) {
-		  ptr = keyptr(bt->frame, idx+1);
-		  if( keycmp (keyptr(bt->frame, idx), ptr->key, ptr->len) >= 0 )
-			fprintf(stderr, "page %.8x idx %.2x out of order\n", page_no, idx);
-		 }
+		if( !bt->frame->free )
 		 if( !bt->frame->lvl )
 			cnt += bt->frame->act;
-		}
+
 		if( page_no > LEAF_page )
 			next = page_no + 1;
 		page_no = next;
@@ -2385,7 +2824,6 @@ uid next, page_no = LEAF_page;	// start on first page of leaves
 unsigned char key[256];
 ThreadArg *args = arg;
 int ch, len = 0, slot;
-BtPageSet set[1];
 BtKey ptr;
 BtDb *bt;
 FILE *in;
@@ -2408,7 +2846,7 @@ FILE *in;
 			{
 			  line++;
 
-			  if( bt_insertkey (bt, key, 10, 0, key + 10, len - 10) )
+			  if( bt_insertkey (bt, key, 10, 0, key + 10, len - 10, 0) )
 				fprintf(stderr, "Error %d Line: %d\n", bt->err, line), exit(0);
 			  len = 0;
 			}
@@ -2431,7 +2869,7 @@ FILE *in;
 			  else if( args->num )
 		  		sprintf((char *)key+len, "%.9d", line + args->idx * args->num), len += 9;
 
-			  if( bt_insertkey (bt, key, len, 0, NULL, 0) )
+			  if( bt_insertkey (bt, key, len, 0, NULL, 0, 0) )
 				fprintf(stderr, "Error %d Line: %d\n", bt->err, line), exit(0);
 			  len = 0;
 			}
@@ -2453,9 +2891,7 @@ FILE *in;
 			  else if( args->num )
 		  		sprintf((char *)key+len, "%.9d", line + args->idx * args->num), len += 9;
 
-			  if( (args->type[1] | 0x20) == 'p' )
-				len = 10;
-			  if( bt_deletekey (bt, key, len, 0) )
+			  if( bt_deletekey (bt, key, len, 0, 0) )
 				fprintf(stderr, "Error %d Line: %d\n", bt->err, line), exit(0);
 			  len = 0;
 			}
@@ -2477,8 +2913,6 @@ FILE *in;
 			  else if( args->num )
 		  		sprintf((char *)key+len, "%.9d", line + args->idx * args->num), len += 9;
 
-			  if( (args->type[1] | 0x20) == 'p' )
-				len = 10;
 			  if( bt_findkey (bt, key, len, NULL, 0) == 0 )
 				found++;
 			  else if( bt->err )
@@ -2492,30 +2926,15 @@ FILE *in;
 
 	case 's':
 		fprintf(stderr, "started scanning\n");
-	  	do {
-			if( set->pool = bt_pinpool (bt, page_no) )
-				set->page = bt_page (bt, set->pool, page_no);
-			else
-				break;
-			set->latch = bt_pinlatch (bt, page_no);
-			bt_lockpage (BtLockRead, set->latch);
-			next = bt_getid (set->page->right);
-			cnt += set->page->act;
 
-			for( slot = 0; slot++ < set->page->cnt; )
-			 if( next || slot < set->page->cnt )
-			  if( !slotptr(set->page, slot)->dead ) {
-				ptr = keyptr(set->page, slot);
-				fwrite (ptr->key, ptr->len, 1, stdout);
-				fputc ('\n', stdout);
-			  }
+		if( slot = bt_startpage (bt, LEAF_page) )
+		  do {
+			ptr = keyptr(bt->cursor, slot);
+			fwrite (ptr->key, ptr->len, 1, stdout);
+			fputc ('\n', stdout);
+			cnt++;
+		  } while( slot = bt_nextkey (bt) );
 
-			bt_unlockpage (BtLockRead, set->latch);
-			bt_unpinlatch (set->latch);
-			bt_unpinpool (set->pool);
-	  	} while( page_no = next );
-
-	  	cnt--;	// remove stopper key
 		fprintf(stderr, " Total keys read %d\n", cnt);
 		break;
 
@@ -2549,7 +2968,6 @@ FILE *in;
 			page_no = next;
 		}
 		
-	  	cnt--;	// remove stopper key
 		fprintf(stderr, " Total keys read %d\n", cnt);
 		break;
 	}
