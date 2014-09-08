@@ -25,6 +25,8 @@ threadskv2.c	Multi-Threaded/Multi-Process based on threadskv1 that replaces the 
 
 threadskv3.c	Multi-Threaded/Multi-Process based on threadskv1 that introduces librarian filler slots in the linear key array to minimize data movement when a new key is inserted into the middle of the array.
 
+threadskv4b.c	Multi-Threaded/Multi-Process based on threadskv3 that manages duplicate keys added to the btree.
+
 Compilation is achieved on linux or Windows by:
 
 gcc -D STANDALONE threads2h.c -lpthread
