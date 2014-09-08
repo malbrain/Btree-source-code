@@ -1,7 +1,7 @@
 // btree version threadskv1 sched_yield version
 //	with reworked bt_deletekey code
 //	and phase-fair reader writer lock
-// 12 MAR 2014
+// 08 SEP 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -1645,7 +1645,7 @@ uint idx;
 BTERR bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl)
 {
 unsigned char lowerfence[256], higherfence[256];
-uint slot, idx, dirty = 0, fence, found;
+uint slot, idx, found, fence;
 BtPageSet set[1], right[1];
 unsigned char value[BtId];
 BtKey ptr;
@@ -1655,7 +1655,7 @@ BtKey ptr;
 	else
 		return bt->err;
 
-	//	are we deleting a fence slot?
+	//	are we deleting a fence key?
 
 	fence = slot == set->page->cnt;
 
@@ -1663,11 +1663,11 @@ BtKey ptr;
 
 	if( found = !keycmp (ptr, key, len) )
 	  if( found = slotptr(set->page, slot)->dead == 0 ) {
-		dirty = slotptr(set->page, slot)->dead = 1;
+		slotptr(set->page, slot)->dead = 1;
  		set->page->dirty = 1;
  		set->page->act--;
 
-		// collapse empty slots
+		// collapse empty slots beneath our fence
 
 		while( idx = set->page->cnt - 1 )
 		  if( slotptr(set->page, idx)->dead ) {
@@ -1679,7 +1679,7 @@ BtKey ptr;
 
 	//	did we delete a fence key in an upper level?
 
-	if( dirty && lvl && set->page->act && fence )
+	if( found && fence && lvl && set->page->act )
 	  if( bt_fixfence (bt, set, lvl) )
 		return bt->err;
 	  else
@@ -2057,64 +2057,28 @@ BtVal val;
 	bt_unpinlatch (right->latch);
 	return 0;
 }
-//  Insert new key into the btree at given level.
+//	install new key and value onto page
+//	page must already be checked for
+//	adequate space
 
-BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint keylen, uint lvl, void *value, uint vallen)
+BTERR bt_insertslot (BtDb *bt, BtPageSet *set, uint slot, unsigned char *key,uint keylen, unsigned char *value, uint vallen)
 {
-BtPageSet set[1];
-uint slot, idx;
-uint reuse;
-BtKey ptr;
-BtVal val;
+BtSlot *node;
+uint idx;
 
-	while( 1 ) {
-		if( slot = bt_loadpage (bt, set, key, keylen, lvl, BtLockWrite) )
-			ptr = keyptr(set->page, slot);
-		else
-		{
-			if( !bt->err )
-				bt->err = BTERR_ovflw;
-			return bt->err;
-		}
-
-		// if key already exists, update value and return
-
-		if( reuse = !keycmp (ptr, key, keylen) )
-		  if( val = valptr(set->page, slot), val->len >= vallen ) {
-			if( slotptr(set->page, slot)->dead )
-				set->page->act++;
-			slotptr(set->page, slot)->dead = 0;
-			val->len = vallen;
-			memcpy (val->value, value, vallen);
-			bt_unlockpage(BtLockWrite, set->latch);
-			bt_unpinlatch (set->latch);
-			bt_unpinpool (set->pool);
-			return 0;
-		  } else {
-			if( !slotptr(set->page, slot)->dead )
-				set->page->act--;
-			slotptr(set->page, slot)->dead = 1;
-			set->page->dirty = 1;
-		  }
-
-		// check if page has enough space
-
- 		if( slot = bt_cleanpage (bt, set->page, keylen, slot, vallen) )
-			break;
-
-		if( bt_splitpage (bt, set) )
-			return bt->err;
-	}
-
-	// calculate next available slot and copy key into page
+	// copy value onto page
 
 	set->page->min -= vallen + 1; // reset lowest used offset
 	((unsigned char *)set->page)[set->page->min] = vallen;
 	memcpy ((unsigned char *)set->page + set->page->min +1, value, vallen );
 
+	// copy key onto page
+
 	set->page->min -= keylen + 1; // reset lowest used offset
 	((unsigned char *)set->page)[set->page->min] = keylen;
 	memcpy ((unsigned char *)set->page + set->page->min +1, key, keylen );
+
+	//	find first empty slot
 
 	for( idx = slot; idx < set->page->cnt; idx++ )
 	  if( slotptr(set->page, idx)->dead )
@@ -2122,16 +2086,19 @@ BtVal val;
 
 	// now insert key into array before slot
 
-	if( !reuse && idx == set->page->cnt )
-		idx++, set->page->cnt++;
+	if( idx == set->page->cnt )
+		idx += 1, set->page->cnt += 1;
 
 	set->page->act++;
 
 	while( idx > slot )
-		*slotptr(set->page, idx) = *slotptr(set->page, idx -1), idx--;
+		*slotptr(set->page, idx) = *slotptr(set->page, idx - 1), idx--;
 
-	slotptr(set->page, slot)->off = set->page->min;
-	slotptr(set->page, slot)->dead = 0;
+	//	fill in new slot
+
+	node = slotptr(set->page, slot);
+	node->off = set->page->min;
+	node->dead = 0;
 
 	bt_unlockpage (BtLockWrite, set->latch);
 	bt_unpinlatch (set->latch);
@@ -2139,7 +2106,85 @@ BtVal val;
 	return 0;
 }
 
-//  cache page of keys into cursor and return starting slot for given key
+//  Insert new key into the btree at given level.
+//	either add a new key or update/add an existing one
+
+BTERR bt_insertkey (BtDb *bt, unsigned char *key, uint keylen, uint lvl, void *value, uint vallen)
+{
+BtPageSet set[1];
+uint slot, idx;
+uid sequence;
+BtKey ptr;
+BtVal val;
+
+  while( 1 ) { // find the page and slot for the current key
+	if( slot = bt_loadpage (bt, set, key, keylen, lvl, BtLockWrite) )
+		ptr = keyptr(set->page, slot);
+	else {
+		if( !bt->err )
+			bt->err = BTERR_ovflw;
+		return bt->err;
+	}
+
+	//	check for adequate space on the page
+	//	and insert the new key before slot.
+
+	if( keycmp (ptr, key, keylen) ) {
+	  if( !(slot = bt_cleanpage (bt, set->page, keylen, slot, vallen)) )
+		if( bt_splitpage (bt, set) )
+		  return bt->err;
+		else
+		  continue;
+
+	  return bt_insertslot (bt, set, slot, key, keylen, value, vallen);
+	}
+
+	// if key already exists, update value and return
+
+	if( val = valptr(set->page, slot), val->len >= vallen ) {
+		if( slotptr(set->page, slot)->dead )
+			set->page->act++;
+		slotptr(set->page, slot)->dead = 0;
+		set->page->dirty = 1;
+		val->len = vallen;
+		memcpy (val->value, value, vallen);
+		bt_unlockpage(BtLockWrite, set->latch);
+		bt_unpinlatch (set->latch);
+		bt_unpinpool (set->pool);
+		return 0;
+	}
+
+	//	new update value doesn't fit in existing value area
+
+	if( !slotptr(set->page, slot)->dead )
+		set->page->dirty = 1;
+	else {
+		slotptr(set->page, slot)->dead = 0;
+		set->page->act++;
+	}
+
+	if( !(slot = bt_cleanpage (bt, set->page, keylen, slot, vallen)) )
+	  if( bt_splitpage (bt, set) )
+		return bt->err;
+	  else
+		continue;
+
+	set->page->min -= vallen + 1;
+	((unsigned char *)set->page)[set->page->min] = vallen;
+	memcpy ((unsigned char *)set->page + set->page->min +1, value, vallen);
+
+	set->page->min -= keylen + 1;
+	((unsigned char *)set->page)[set->page->min] = keylen;
+	memcpy ((unsigned char *)set->page + set->page->min +1, key, keylen);
+	
+	slotptr(set->page, slot)->off = set->page->min;
+	bt_unlockpage(BtLockWrite, set->latch);
+	bt_unpinlatch (set->latch);
+	bt_unpinpool (set->pool);
+	return 0;
+  }
+  return 0;
+}
 
 uint bt_startkey (BtDb *bt, unsigned char *key, uint len)
 {
@@ -2623,7 +2668,8 @@ BtDb *bt;
 #endif
 	args = malloc (cnt * sizeof(ThreadArg));
 
-	mgr = bt_mgr ((argv[1]), BT_rw, bits, poolsize, segsize, poolsize / 8);
+//	mgr = bt_mgr ((argv[1]), BT_rw, bits, poolsize, segsize, poolsize / 8);
+	mgr = bt_mgr ((argv[1]), BT_rw, bits, poolsize, segsize, 8191);
 
 	if( !mgr ) {
 		fprintf(stderr, "Index Open Error %s\n", argv[1]);
