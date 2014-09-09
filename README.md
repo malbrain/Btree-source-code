@@ -27,6 +27,8 @@ threadskv3.c	Multi-Threaded/Multi-Process based on threadskv1 that introduces li
 
 threadskv4b.c	Multi-Threaded/Multi-Process based on threadskv3 that manages duplicate keys added to the btree.
 
+threadskv5.c	Multi-Threaded/Multi-Process based on threadskv4b that supports bi-directional cursors through the btree.
+
 Compilation is achieved on linux or Windows by:
 
 gcc -D STANDALONE threads2h.c -lpthread
