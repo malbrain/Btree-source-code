@@ -214,7 +214,7 @@ typedef struct BtPage_ {
 	unsigned char lvl:7;		// level of page
 	unsigned char kill:1;		// page is being deleted
 	unsigned char left[BtId];	// page number to left
-	unsigend char filler[2];	// padding to multiple of 8
+	unsigned char filler[2];	// padding to multiple of 8
 	unsigned char right[BtId];	// page number to right
 } *BtPage;
 
@@ -968,6 +968,11 @@ SYSTEM_INFO sysinfo[1];
 		latchhash = latchmgr->latchtotal;
 
 	latchmgr->latchhash = latchhash;
+
+	//  initialize left-most LEAF page in
+	//	alloc->left.
+
+	bt_putid (latchmgr->alloc->left, LEAF_page);
 
 #ifdef unix
 	if( write (mgr->idx, latchmgr, mgr->page_size) < mgr->page_size )
