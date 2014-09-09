@@ -905,6 +905,8 @@ SYSTEM_INFO sysinfo[1];
 			return free(mgr), free(latchmgr), NULL;
 	} else if( mode == BT_ro )
 		return free(latchmgr), bt_mgrclose (mgr), NULL;
+	else
+		initit = 1;
 #else
 	latchmgr = VirtualAlloc(NULL, BT_maxpage, MEM_COMMIT, PAGE_READWRITE);
 	size = GetFileSize(mgr->idx, amt);
