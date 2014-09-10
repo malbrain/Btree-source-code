@@ -1709,6 +1709,7 @@ BtPageSet right2[1];
 	bt_putid(right2->page->left, left_page_no);
 	bt_unlockpage (BtLockWrite, right2->latch);
 	bt_unpinlatch (right2->latch);
+	bt_unpinpool (right2->pool);
 	return 0;
 }
 
@@ -1718,8 +1719,8 @@ BtPageSet right2[1];
 BTERR bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl)
 {
 unsigned char lowerfence[BT_keyarray], higherfence[BT_keyarray];
-BtPageSet set[1], right[1], right2[1];
 uint slot, idx, found, fence;
+BtPageSet set[1], right[1];
 unsigned char value[BtId];
 BtKey *ptr, *tst;
 BtVal *val;
