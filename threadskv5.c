@@ -2008,8 +2008,7 @@ BtVal *val;
 
 		val = valptr(bt->frame, cnt);
 		nxt -= val->len + sizeof(BtVal);
-		((unsigned char *)page)[nxt] = val->len;
-		memcpy ((unsigned char *)page + nxt + sizeof(BtVal), val->value, val->len);
+		memcpy ((unsigned char *)page + nxt, val, val->len + sizeof(BtVal));
 
 		// copy the key across
 
@@ -2143,14 +2142,11 @@ uint prev;
 			continue;
 		src = valptr(set->page, cnt);
 		nxt -= src->len + sizeof(BtVal);
-		val = (BtVal*)((unsigned char *)bt->frame + nxt);
-		memcpy (val->value, src->value, src->len);
-		val->len = src->len;
+		memcpy ((unsigned char *)bt->frame + nxt, src, src->len + sizeof(BtVal));
 
 		key = keyptr(set->page, cnt);
 		nxt -= key->len + sizeof(BtKey);
-		ptr = (BtKey*)((unsigned char *)bt->frame + nxt);
-		memcpy (ptr, key, key->len + sizeof(BtKey));
+		memcpy ((unsigned char *)bt->frame + nxt, key, key->len + sizeof(BtVal));
 
 		//	add librarian slot
 
@@ -2218,10 +2214,9 @@ uint prev;
 	while( cnt++ < max ) {
 		if( slotptr(bt->frame, cnt)->dead )
 			continue;
-		val = valptr(bt->frame, cnt);
-		nxt -= val->len + sizeof(BtVal);
-		((unsigned char *)set->page)[nxt] = val->len;
-		memcpy ((unsigned char *)set->page + nxt + sizeof(BtVal), val->value, val->len);
+		src = valptr(bt->frame, cnt);
+		nxt -= src->len + sizeof(BtVal);
+		memcpy ((unsigned char *)set->page + nxt, src, src->len + sizeof(BtVal));
 
 		key = keyptr(bt->frame, cnt);
 		nxt -= key->len + sizeof(BtKey);
