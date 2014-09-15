@@ -1207,7 +1207,6 @@ uint subpage = (uint)(page_no & bt->mgr->poolmask); // page within mapping
 BtPage page;
 
 	page = (BtPage)(pool->map + (subpage << bt->mgr->page_bits));
-//	madvise (page, bt->mgr->page_size, MADV_WILLNEED);
 	return page;
 }
 
@@ -1395,6 +1394,7 @@ void bt_unlockpage(BtLock mode, BtLatchSet *set)
 }
 
 //	allocate a new page
+//	return with page pinned.
 
 BTERR bt_newpage(BtDb *bt, BtPageSet *set)
 {
@@ -1938,6 +1938,12 @@ BtVal *val;
 	if( slotptr(set->page, slot)->type == Duplicate )
 		len -= BtId;
 
+	//	not there if we reach the stopper key
+
+	if( slot == set->page->cnt )
+	  if( !bt_getid (set->page->right) )
+		break;
+
 	// if key exists, return >= 0 value bytes copied
 	//	otherwise return (-1)
 
@@ -2193,7 +2199,6 @@ uint prev;
 		return bt->err;
 
 	memcpy (right->page, bt->frame, bt->mgr->page_size);
-	bt_unpinpool (right->pool);
 
 	//	update lower keys to continue in old page
 
@@ -2278,6 +2283,7 @@ uint prev;
 
 	bt_unlockpage (BtLockParent, right->latch);
 	bt_unpinlatch (right->latch);
+	bt_unpinpool (right->pool);
 	return 0;
 }
 
@@ -2664,6 +2670,18 @@ struct timeval tv[1];
 }
 #endif
 
+void bt_poolaudit (BtMgr *mgr)
+{
+uint slot = 0;
+BtPool *pool;
+
+	while( slot++ < mgr->poolcnt ) {
+		pool = mgr->pool + slot;
+		if( pool->pin & ~CLOCK_bit )
+		  fprintf(stderr, "pool slot %d pinned\n", slot);
+	}
+}
+
 uint bt_latchaudit (BtDb *bt)
 {
 ushort idx, hashidx;
@@ -2736,7 +2754,7 @@ BtKey *ptr;
 		if( !bt->frame->free ) {
 		 for( idx = 0; idx++ < bt->frame->cnt - 1; ) {
 		  ptr = keyptr(bt->frame, idx+1);
-		  if( keycmp (keyptr(bt->frame, idx), ptr->key, ptr->len) >= 0 )
+		  if( keycmp (keyptr(bt->frame, idx), ptr->key, ptr->len) > 0 )
 			fprintf(stderr, "page %.8x idx %.2x out of order\n", page_no, idx);
 		 }
 		 if( !bt->frame->lvl )
@@ -2853,6 +2871,7 @@ FILE *in;
 			}
 			else if( len < BT_maxkey )
 				key[len++] = ch;
+
 		fprintf(stderr, "finished %s for %d keys, %d found\n", args->infile, line, found);
 		break;
 
@@ -2887,6 +2906,7 @@ FILE *in;
 				set->page = bt_page (bt, set->pool, page_no);
 			else
 				break;
+			madvise (set->page, bt->mgr->page_size, MADV_WILLNEED);
 			set->latch = bt_pinlatch (bt, page_no);
 			bt_lockpage (BtLockRead, set->latch);
 			next = bt_getid (set->page->right);
@@ -3084,6 +3104,7 @@ BtDb *bt;
 	elapsed = getCpuTime(2);
 	fprintf(stderr, " sys  %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
 
+	bt_poolaudit (mgr);
 	bt_mgrclose (mgr);
 }
 

@@ -1890,6 +1890,12 @@ BtVal val;
 	if( slotptr(set->page, slot)->type == Duplicate )
 		len -= BtId;
 
+	//	not there if we reach the stopper key
+
+	if( slot == set->page->cnt )
+	  if( !bt_getid (set->page->right) )
+		break;
+
 	// if key exists, return >= 0 value bytes copied
 	//	otherwise return (-1)
 
