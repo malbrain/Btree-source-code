@@ -1,7 +1,7 @@
 Btree-source-code
 =================
 
-A working project for High-concurrency B-tree source code in C
+A working project for High-concurrency B-tree source code in C.  You probably want to download threadskv6.c for the latest developement version.
 
 Here are files in the btree source code:
 
