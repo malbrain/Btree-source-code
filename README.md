@@ -29,6 +29,8 @@ threadskv4b.c	Multi-Threaded/Multi-Process based on threadskv3 that manages dupl
 
 threadskv5.c	Multi-Threaded/Multi-Process based on threadskv4b that supports bi-directional cursors through the btree. Also supports raw disk partitions for btrees.
 
+threadskv6.c	Multi-Threaded/Single-Process with traditional buffer pool manager using the swap device.  Based on threadskv5 and btree2u.
+
 Compilation is achieved on linux or Windows by:
 
 gcc -D STANDALONE threads2h.c -lpthread
