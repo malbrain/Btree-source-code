@@ -31,7 +31,7 @@ threadskv5.c	Multi-Threaded/Multi-Process based on threadskv4b that supports bi-
 
 threadskv6.c	Multi-Threaded/Single-Process with traditional buffer pool manager using the swap device.  Based on threadskv5 and btree2u.
 
-threadskv7.c	Multi-Threaded/Single-Process with atomic add of a set of keys
+threadskv7.c	Multi-Threaded/Single-Process with atomic add of a set of keys under eventual consistency.  Adds a lock manager.
 
 Compilation is achieved on linux or Windows by:
 
