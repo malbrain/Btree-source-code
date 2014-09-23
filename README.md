@@ -1,7 +1,7 @@
 Btree-source-code
 =================
 
-A working project for High-concurrency B-tree source code in C.  You probably want to download threadskv7.c for the latest developement version.
+A working project for High-concurrency B-tree source code in C.  You probably want to download threadskv8.c for the latest developement version.
 
 Here are files in the btree source code:
 
@@ -32,6 +32,8 @@ threadskv5.c	Multi-Threaded/Multi-Process based on threadskv4b that supports bi-
 threadskv6.c	Multi-Threaded/Single-Process with traditional buffer pool manager using the swap device.  Based on threadskv5 and btree2u.
 
 threadskv7.c	Multi-Threaded/Single-Process with atomic add of a set of keys under eventual consistency.  Adds a lock manager.
+
+threadskv8.c	Multi-Threaded/Single-Process with atomic-consistent add of a set of keys. BiDrectional cursors given up.
 
 Compilation is achieved on linux or Windows by:
 
