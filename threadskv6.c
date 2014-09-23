@@ -2006,16 +2006,18 @@ uint prev;
 
 	// insert new fence for reformulated left block of smaller keys
 
+	ptr = (BtKey*)fencekey;
 	bt_putid (value, set->page_no);
 
-	if( bt_insertkey (bt, fencekey+1, *fencekey, lvl+1, value, BtId, 1) )
+	if( bt_insertkey (bt, ptr->key, ptr->len, lvl+1, value, BtId, 1) )
 		return bt->err;
 
 	// switch fence for right block of larger keys to new right page
 
+	ptr = (BtKey*)rightkey;
 	bt_putid (value, right->page_no);
 
-	if( bt_insertkey (bt, rightkey+1, *rightkey, lvl+1, value, BtId, 1) )
+	if( bt_insertkey (bt, ptr->key, ptr->len, lvl+1, value, BtId, 1) )
 		return bt->err;
 
 	bt_unlockpage (BtLockParent, set->latch);
