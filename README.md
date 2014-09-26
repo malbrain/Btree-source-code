@@ -31,13 +31,13 @@ threadskv5.c	Multi-Threaded/Multi-Process based on threadskv4b that supports bi-
 
 threadskv6.c	Multi-Threaded/Single-Process with traditional buffer pool manager using the swap device.  Based on threadskv5 and btree2u.
 
-threadskv7.c	Multi-Threaded/Single-Process with atomic add of a set of keys under eventual consistency.  Adds a lock manager.
+threadskv7.c	Multi-Threaded/Single-Process with atomic add of a set of keys under eventual consistency.  Adds an individual key lock manager.
 
-threadskv8.c	Multi-Threaded/Single-Process with atomic-consistent add of a set of keys. BiDrectional cursors given up.
+threadskv8.c	Multi-Threaded/Single-Process with atomic-consistent add of a set of keys based on threadskv6.c.  Uses btree page latches as locking granularity.
 
 Compilation is achieved on linux or Windows by:
 
-gcc -D STANDALONE threads2h.c -lpthread
+gcc -D STANDALONE -O3 threadskv8.c -lpthread
 
 or
 
