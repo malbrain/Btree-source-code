@@ -1750,7 +1750,9 @@ BtVal *val;
 	while( cnt++ < max ) {
 		if( cnt == slot )
 			newslot = idx + 2;
-		if( cnt < max && slotptr(bt->frame,cnt)->dead )
+
+		if( cnt < max || page->lvl )
+		 if( slotptr(bt->frame,cnt)->dead )
 			continue;
 
 		// copy the value across
@@ -1767,11 +1769,9 @@ BtVal *val;
 
 		// make a librarian slot
 
-		if( idx ) {
-			slotptr(page, ++idx)->off = nxt;
-			slotptr(page, idx)->type = Librarian;
-			slotptr(page, idx)->dead = 1;
-		}
+		slotptr(page, ++idx)->off = nxt;
+		slotptr(page, idx)->type = Librarian;
+		slotptr(page, idx)->dead = 1;
 
 		// set up the slot
 
@@ -1885,8 +1885,10 @@ uint prev;
 	idx = 0;
 
 	while( cnt++ < max ) {
-		if( slotptr(set->page, cnt)->dead && cnt < max )
+		if( cnt < max || set->page->lvl )
+		  if( slotptr(set->page, cnt)->dead )
 			continue;
+
 		src = valptr(set->page, cnt);
 		nxt -= src->len + sizeof(BtVal);
 		memcpy ((unsigned char *)bt->frame + nxt, src, src->len + sizeof(BtVal));
@@ -1898,11 +1900,9 @@ uint prev;
 
 		//	add librarian slot
 
-		if( idx ) {
-			slotptr(bt->frame, ++idx)->off = nxt;
-			slotptr(bt->frame, idx)->type = Librarian;
-			slotptr(bt->frame, idx)->dead = 1;
-		}
+		slotptr(bt->frame, ++idx)->off = nxt;
+		slotptr(bt->frame, idx)->type = Librarian;
+		slotptr(bt->frame, idx)->dead = 1;
 
 		//  add actual slot
 
@@ -1971,11 +1971,9 @@ uint prev;
 
 		//	add librarian slot
 
-		if( idx ) {
-			slotptr(set->page, ++idx)->off = nxt;
-			slotptr(set->page, idx)->type = Librarian;
-			slotptr(set->page, idx)->dead = 1;
-		}
+		slotptr(set->page, ++idx)->off = nxt;
+		slotptr(set->page, idx)->type = Librarian;
+		slotptr(set->page, idx)->dead = 1;
 
 		//	add actual slot
 
