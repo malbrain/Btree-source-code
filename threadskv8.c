@@ -2325,17 +2325,19 @@ uint slot;
 	  bt_unlockpage(bt, BtLockRead, set->latch);
 	  bt_lockpage(bt, BtLockAtomic, set->latch);
 	  bt_lockpage(bt, BtLockRead, set->latch);
-	  bt_unlockpage(bt, BtLockAccess, set->latch);
 
 	  if( !set->page->kill )
-	   if( slot = bt_findslot (set->page, key, len) )
+	   if( slot = bt_findslot (set->page, key, len) ) {
+	  	bt_unlockpage(bt, BtLockAccess, set->latch);
 		return slot;
+	   }
 
 	  bt_unlockpage(bt, BtLockAtomic, set->latch);
 	  }
 
 	//  slide right into next page
 
+	bt_unlockpage(bt, BtLockAccess, set->latch);
 	page_no = bt_getid(set->page->right);
 	prevlatch = set->latch;
   }
