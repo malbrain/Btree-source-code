@@ -109,6 +109,28 @@ typedef enum{
 	BtLockAtomic = 32
 } BtLock;
 
+//	lite weight mutex
+
+typedef struct {
+  union {
+	struct {
+	  uint xlock:1;		// one writer has exclusive lock
+	  uint wrt:31;		// count of other writers waiting
+	} bits[1];
+	uint value[1];
+  };
+} BtMutexLatch;
+
+#define XCL 1
+#define WRT 2
+
+//	mode & definition for lite latch implementation
+
+enum {
+	QueRd = 1,		// reader queue
+	QueWr = 2		// writer queue
+} RWQueue;
+
 //	definition for phase-fair reader/writer lock implementation
 
 typedef struct {
@@ -123,8 +145,7 @@ typedef struct {
 //	write only lock
 
 typedef struct {
-	volatile ushort ticket[1];
-	volatile ushort serving[1];
+	BtMutexLatch xcl[1];
 	ushort tid;
 	ushort dup;
 } WOLock;
@@ -133,24 +154,6 @@ typedef struct {
 #define PRES 0x2
 #define MASK 0x3
 #define RINC 0x4
-
-//	lite weight mutex
-
-// exclusive is set for write access
-
-typedef struct {
-	volatile unsigned char exclusive[1];
-	unsigned char filler;
-} BtMutexLatch;
-
-#define XCL 1
-
-//	mode & definition for lite latch implementation
-
-enum {
-	QueRd = 1,		// reader queue
-	QueWr = 2		// writer queue
-} RWQueue;
 
 //  hash table entries
 
@@ -466,29 +469,75 @@ uid bt_newdup (BtDb *bt)
 #endif
 }
 
+//	lite weight spin lock Latch Manager
+
+int sys_futex(void *addr1, int op, int val1, struct timespec *timeout, void *addr2, int val3)
+{
+	return syscall(SYS_futex, addr1, op, val1, timeout, addr2, val3);
+}
+
+void bt_mutexlock(BtMutexLatch *latch)
+{
+BtMutexLatch prev[1];
+uint slept = 0;
+
+  while( 1 ) {
+	*prev->value = __sync_fetch_and_or(latch->value, XCL);
+
+	if( !prev->bits->xlock ) {			// did we set XCL bit?
+	    if( slept )
+		  __sync_fetch_and_sub(latch->value, WRT);
+		return;
+	}
+
+	if( !slept ) {
+		prev->bits->wrt++;
+		__sync_fetch_and_add(latch->value, WRT);
+	}
+
+	sys_futex (latch->value, FUTEX_WAIT_BITSET, *prev->value, NULL, NULL, QueWr);
+	slept = 1;
+  }
+}
+
+//	try to obtain write lock
+
+//	return 1 if obtained,
+//		0 otherwise
+
+int bt_mutextry(BtMutexLatch *latch)
+{
+BtMutexLatch prev[1];
+
+	*prev->value = __sync_fetch_and_or(latch->value, XCL);
+
+	//	take write access if exclusive bit is clear
+
+	return !prev->bits->xlock;
+}
+
+//	clear write mode
+
+void bt_releasemutex(BtMutexLatch *latch)
+{
+BtMutexLatch prev[1];
+
+	*prev->value = __sync_fetch_and_and(latch->value, ~XCL);
+
+	if( prev->bits->wrt )
+	  sys_futex( latch->value, FUTEX_WAKE_BITSET, 1, NULL, NULL, QueWr );
+}
+
 //	Write-Only Queue Lock
 
 void WriteOLock (WOLock *lock, ushort tid)
 {
-ushort tix;
-
 	if( lock->tid == tid ) {
 		lock->dup++;
 		return;
 	}
-#ifdef unix
-	tix = __sync_fetch_and_add (lock->ticket, 1);
-#else
-	tix = _InterlockedExchangeAdd16 (lock->ticket, 1);
-#endif
-	// wait for our ticket to come up
 
-	while( tix != lock->serving[0] )
-#ifdef unix
-		sched_yield();
-#else
-		SwitchToThread ();
-#endif
+	bt_mutexlock(lock->xcl);
 	lock->tid = tid;
 }
 
@@ -500,7 +549,7 @@ void WriteORelease (WOLock *lock)
 	}
 
 	lock->tid = 0;
-	lock->serving[0]++;
+	bt_releasemutex(lock->xcl);
 }
 
 //	Phase-Fair reader/writer lock implementation
@@ -623,60 +672,6 @@ void ReadRelease (RWLock *lock)
 	_InterlockedExchangeAdd16 (lock->rout, RINC);
 #endif
 }
-
-//	lite weight spin lock Latch Manager
-
-int sys_futex(void *addr1, int op, int val1, struct timespec *timeout, void *addr2, int val3)
-{
-	return syscall(SYS_futex, addr1, op, val1, timeout, addr2, val3);
-}
-
-void bt_mutexlock(BtMutexLatch *latch)
-{
-unsigned char prev;
-
-  do {
-#ifdef  unix
-	prev = __sync_fetch_and_or(latch->exclusive, XCL);
-#else
-	prev = _InterlockedOr8(latch->exclusive, XCL);
-#endif
-	if( !(prev & XCL) )
-		return;
-#ifdef  unix
-  } while( sched_yield(), 1 );
-#else
-  } while( SwitchToThread(), 1 );
-#endif
-}
-
-//	try to obtain write lock
-
-//	return 1 if obtained,
-//		0 otherwise
-
-int bt_mutextry(BtMutexLatch *latch)
-{
-uint prev;
-
-#ifdef  unix
-	prev = __sync_fetch_and_or(latch->exclusive, XCL);
-#else
-	prev = _InterlockedOr8(latch->exclusive, XCL);
-#endif
-	//	take write access if exclusive bit is clear
-
-	return !(prev & XCL);
-}
-
-//	clear write mode
-
-void bt_releasemutex(BtMutexLatch *latch)
-{
-	*latch->exclusive = 0;
-}
-
-//	recovery manager -- flush dirty pages
 
 void bt_flushlsn (BtDb *bt)
 {
@@ -3567,13 +3562,13 @@ uint entry = 0;
 		if( *latch->access->rin & MASK )
 			fprintf(stderr, "latchset %d accesslocked for page %d\n", entry, latch->page_no);
 
-		if( *latch->parent->ticket != *latch->parent->serving )
+		if( *latch->parent->xcl->value )
 			fprintf(stderr, "latchset %d parentlocked for page %d\n", entry, latch->page_no);
 
-		if( *latch->atomic->ticket != *latch->atomic->serving )
+		if( *latch->atomic->xcl->value )
 			fprintf(stderr, "latchset %d atomiclocked for page %d\n", entry, latch->page_no);
 
-		if( *latch->modify->exclusive )
+		if( *latch->modify->value )
 			fprintf(stderr, "latchset %d modifylocked for page %d\n", entry, latch->page_no);
 
 		if( latch->pin & ~CLOCK_bit )
