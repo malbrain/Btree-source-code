@@ -110,28 +110,6 @@ typedef enum{
 	BtLockAtomic = 32
 } BtLock;
 
-//	lite weight spin latch
-
-volatile typedef struct {
-	ushort exclusive:1;
-	ushort pending:1;
-	ushort share:14;
-} BtMutexLatch;
-
-#define XCL 1
-#define PEND 2
-#define BOTH 3
-#define SHARE 4
-
-/*
-// exclusive is set for write access
-
-volatile typedef struct {
-	unsigned char exclusive[1];
-	unsigned char filler;
-} BtMutexLatch;
-*/
-/*
 typedef struct {
   union {
 	struct {
@@ -141,7 +119,7 @@ typedef struct {
 	uint value[1];
   };
 } BtMutexLatch;
-*/
+
 #define XCL 1
 #define WRT 2
 
@@ -497,46 +475,6 @@ int sys_futex(void *addr1, int op, int val1, struct timespec *timeout, void *add
 
 void bt_mutexlock(BtMutexLatch *latch)
 {
-ushort prev;
-
-  do {
-#ifdef  unix
-	prev = __sync_fetch_and_or((ushort *)latch, PEND | XCL);
-#else
-	prev = _InterlockedOr16((ushort *)latch, PEND | XCL);
-#endif
-	if( !(prev & XCL) )
-	  if( !(prev & ~BOTH) )
-		return;
-	  else
-#ifdef unix
-		__sync_fetch_and_and ((ushort *)latch, ~XCL);
-#else
-		_InterlockedAnd16((ushort *)latch, ~XCL);
-#endif
-#ifdef  unix
-  } while( sched_yield(), 1 );
-#else
-  } while( SwitchToThread(), 1 );
-#endif
-/*
-unsigned char prev;
-
-  do {
-#ifdef  unix
-	prev = __sync_fetch_and_or(latch->exclusive, XCL);
-#else
-	prev = _InterlockedOr8(latch->exclusive, XCL);
-#endif
-	if( !(prev & XCL) )
-		return;
-#ifdef  unix
-  } while( sched_yield(), 1 );
-#else
-  } while( SwitchToThread(), 1 );
-#endif
-*/
-/*
 BtMutexLatch prev[1];
 uint slept = 0;
 
@@ -556,7 +494,7 @@ uint slept = 0;
 
 	sys_futex (latch->value, FUTEX_WAIT_BITSET, *prev->value, NULL, NULL, QueWr);
 	slept = 1;
-  } */
+  }
 }
 
 //	try to obtain write lock
@@ -566,38 +504,6 @@ uint slept = 0;
 
 int bt_mutextry(BtMutexLatch *latch)
 {
-ushort prev;
-
-#ifdef  unix
-	prev = __sync_fetch_and_or((ushort *)latch, XCL);
-#else
-	prev = _InterlockedOr16((ushort *)latch, XCL);
-#endif
-	//	take write access if all bits are clear
-
-	if( !(prev & XCL) )
-	  if( !(prev & ~BOTH) )
-		return 1;
-	  else
-#ifdef unix
-		__sync_fetch_and_and ((ushort *)latch, ~XCL);
-#else
-		_InterlockedAnd16((ushort *)latch, ~XCL);
-#endif
-	return 0;
-/*
-unsigned char prev;
-
-#ifdef  unix
-	prev = __sync_fetch_and_or(latch->exclusive, XCL);
-#else
-	prev = _InterlockedOr8(latch->exclusive, XCL);
-#endif
-	//	take write access if all bits are clear
-
-	return !(prev & XCL);
-*/
-/*
 BtMutexLatch prev[1];
 
 	*prev->value = __sync_fetch_and_or(latch->value, XCL);
@@ -605,29 +511,18 @@ BtMutexLatch prev[1];
 	//	take write access if exclusive bit is clear
 
 	return !prev->bits->xlock;
-*/
 }
 
 //	clear write mode
 
 void bt_releasemutex(BtMutexLatch *latch)
 {
-#ifdef unix
-	__sync_fetch_and_and((ushort *)latch, ~BOTH);
-#else
-	_InterlockedAnd16((ushort *)latch, ~BOTH);
-#endif
-/*
-	*latch->exclusive = 0;
-*/
-/*
 BtMutexLatch prev[1];
 
 	*prev->value = __sync_fetch_and_and(latch->value, ~XCL);
 
 	if( prev->bits->wrt )
 	  sys_futex( latch->value, FUTEX_WAKE_BITSET, 1, NULL, NULL, QueWr );
-*/
 }
 
 //	Write-Only Queue Lock
@@ -995,17 +890,6 @@ BtVal *val;
 
 BTERR bt_readpage (BtMgr *mgr, BtPage page, uid page_no)
 {
-off64_t off = page_no << mgr->page_bits;
-
-	if( pread (mgr->idx, page, mgr->page_size, page_no << mgr->page_bits) < mgr->page_size ) {
-		fprintf (stderr, "Unable to read page %d errno = %d\n", page_no, errno);
-		return BTERR_read;
-	}
-if( page->page_no != page_no )
-abort();
-	mgr->reads++;
-	return 0;
-/*
 int flag = PROT_READ | PROT_WRITE;
 uint segment = page_no >> 32;
 unsigned char *perm;
@@ -1031,7 +915,7 @@ abort();
 	mgr->segments++;
 
 	bt_releasemutex (mgr->maps);
-  }  */
+  }
 }
 
 //	write page to permanent location in Btree file
@@ -1039,15 +923,6 @@ abort();
 
 BTERR bt_writepage (BtMgr *mgr, BtPage page, uid page_no, int syncit)
 {
-off64_t off = page_no << mgr->page_bits;
-
-	if( pwrite(mgr->idx, page, mgr->page_size, off) < mgr->page_size ) {
-		fprintf (stderr, "Unable to write page %d errno = %d\n", page_no, errno);
-		return BTERR_wrt;
-	}
-	mgr->writes++;
-	return 0;
-/*
 int flag = PROT_READ | PROT_WRITE;
 uint segment = page_no >> 32;
 unsigned char *perm;
@@ -1072,7 +947,7 @@ unsigned char *perm;
 	mgr->pages[mgr->segments] = mmap (0, (uid)65536 << mgr->page_bits, flag, MAP_SHARED, mgr->idx, mgr->segments << (mgr->page_bits + 16));
 	bt_releasemutex (mgr->maps);
 	mgr->segments++;
-  } */
+  }
 }
 
 //	set CLOCK bit in latch
@@ -1680,13 +1555,12 @@ int blk;
 	//	extend file into new page.
 
 	mgr->pagezero->activepages++;
+	contents->page_no = page_no;
 
-	ftruncate (mgr->idx, (uid)(page_no + 1) << mgr->page_bits);
+	pwrite (mgr->idx, contents, mgr->page_size, (uid)(page_no + 1) << mgr->page_bits);
 	bt_releasemutex(mgr->lock);
 
 	//	don't load cache from btree page, load it from contents
-
-	contents->page_no = page_no;
 
 	if( set->latch = bt_pinlatch (mgr, page_no, contents, thread_id) )
 		set->page = bt_mappage (mgr, set->latch);
