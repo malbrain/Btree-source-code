@@ -112,15 +112,6 @@ typedef struct {
 	ushort serving[1];
 } RWLock;
 
-//	write only queue lock
-
-typedef struct {
-	ushort ticket[1];
-	ushort serving[1];
-	ushort tid;
-	ushort dup;
-} WOLock;
-
 #define PHID 0x1
 #define PRES 0x2
 #define MASK 0x3
@@ -142,6 +133,14 @@ volatile typedef struct {
 #define PEND 2
 #define BOTH 3
 #define SHARE 4
+
+//	write only reentrant lock
+
+typedef struct {
+	BtSpinLatch xcl[1];
+	volatile ushort tid[1];
+	volatile ushort dup[1];
+} WOLock;
 
 //  hash table entries
 
@@ -411,41 +410,39 @@ uid bt_newdup (BtDb *bt)
 #endif
 }
 
-//	Write-Only Queue Lock
+void bt_spinreleasewrite(BtSpinLatch *latch);
+void bt_spinwritelock(BtSpinLatch *latch);
+
+//	Write-Only Reentrant Lock
 
 void WriteOLock (WOLock *lock, ushort tid)
 {
-ushort tix;
+  while( 1 ) {
+	bt_spinwritelock(lock->xcl);
 
-	if( lock->tid == tid ) {
-		lock->dup++;
+	if( *lock->tid == tid ) {
+		*lock->dup += 1;
+		bt_spinreleasewrite(lock->xcl);
 		return;
 	}
-#ifdef unix
-	tix = __sync_fetch_and_add (lock->ticket, 1);
-#else
-	tix = _InterlockedExchangeAdd16 (lock->ticket, 1);
-#endif
-	// wait for our ticket to come up
-
-	while( tix != lock->serving[0] )
-#ifdef unix
-		sched_yield();
-#else
-		SwitchToThread ();
-#endif
-	lock->tid = tid;
+	if( !*lock->tid ) {
+		*lock->tid = tid;
+		bt_spinreleasewrite(lock->xcl);
+		return;
+	}
+	bt_spinreleasewrite(lock->xcl);
+	sched_yield();
+  }
 }
 
 void WriteORelease (WOLock *lock)
 {
-	if( lock->dup ) {
-		lock->dup--;
+	if( *lock->dup ) {
+		*lock->dup -= 1;
 		return;
 	}
 
-	lock->tid = 0;
-	lock->serving[0]++;
+	*lock->tid = 0;
 }
 
 //	Phase-Fair reader/writer lock implementation
@@ -3054,7 +3051,7 @@ uint slot = 0;
 			fprintf(stderr, "latchset %d accesslocked for page %.8x\n", slot, latch->page_no);
 		memset ((ushort *)latch->access, 0, sizeof(RWLock));
 
-		if( *latch->parent->ticket != *latch->parent->serving )
+		if( *latch->parent->tid )
 			fprintf(stderr, "latchset %d parentlocked for page %.8x\n", slot, latch->page_no);
 		memset ((ushort *)latch->parent, 0, sizeof(RWLock));
 
@@ -3087,9 +3084,9 @@ BtKey *ptr;
 			fprintf(stderr, "latchset %d accesslocked for page %.8x\n", idx, latch->page_no);
 		memset ((ushort *)latch->access, 0, sizeof(RWLock));
 
-		if( *latch->parent->ticket != *latch->parent->serving )
+		if( *latch->parent->tid )
 			fprintf(stderr, "latchset %d parentlocked for page %.8x\n", idx, latch->page_no);
-		memset ((ushort *)latch->parent, 0, sizeof(RWLock));
+		memset ((ushort *)latch->parent, 0, sizeof(WOLock));
 
 		if( latch->pin ) {
 			fprintf(stderr, "latchset %d pinned for page %.8x\n", idx, latch->page_no);
