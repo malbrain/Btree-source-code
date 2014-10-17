@@ -2,7 +2,6 @@
 //	with reworked bt_deletekey code,
 //	phase-fair re-entrant reader writer locks,
 //	librarian page split code,
-//	duplicate key management
 //	bi-directional cursors
 //	traditional buffer pool manager
 //	ACID batched key-value updates
