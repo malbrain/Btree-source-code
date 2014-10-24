@@ -8,9 +8,9 @@
 //	ACID batched key-value updates
 //	redo log for failure recovery
 //	LSM B-trees for write optimization
-//	and variable sized leaf pages
+//	and larger sized leaf pages than non-leaf
 
-// 21 OCT 2014
+// 24 OCT 2014
 
 // author: karl malbrain, malbrain@cal.berkeley.edu
 
@@ -525,8 +525,8 @@ void WriteLock (RWLock *lock, ushort tid, uint line)
 	bt_mutexlock (lock->xcl);
 	bt_mutexlock (lock->wrt);
 	bt_releasemutex (lock->xcl);
-if( lock->tid )
-abort();
+//if( lock->tid )
+//abort();
 	lock->line = line;
 	lock->tid = tid;
 }
@@ -860,10 +860,10 @@ unsigned char *perm;
 	bt_releasemutex (mgr->maps);
   }
 
-if( !leaf && !page->lvl )
-abort();
-if( leaf && page->lvl )
-abort();
+//if( !leaf && !page->lvl )
+//abort();
+//if( leaf && page->lvl )
+//abort();
   return 0;
 }
 
@@ -876,10 +876,10 @@ uint page_size = mgr->page_size;
 uint off = 0, segment, fragment;
 unsigned char *perm;
 
-if( !leaf && !page->lvl )
-abort();
-if( leaf && page->lvl )
-abort();
+//if( !leaf && !page->lvl )
+//abort();
+//if( leaf && page->lvl )
+//abort();
 //if( !page->lvl && mgr->leaf_xtra == 8 )
 //fprintf(stderr, "WrPage %d\n", (uint)page_no);
   if( leaf )
@@ -922,8 +922,8 @@ abort();
 void bt_unpinlatch (BtLatchSet *latch, ushort thread_no, uint line)
 {
 	bt_mutexlock(latch->modify);
-if( !(latch->pin & ~CLOCK_bit) )
-abort();
+//if( !(latch->pin & ~CLOCK_bit) )
+//abort();
 	latch->pin |= CLOCK_bit;
 	latch->pin--;
 
@@ -941,9 +941,9 @@ BtPage page;
 		page = (BtPage)((entry << mgr->page_bits << mgr->leaf_xtra) + mgr->leafpool);
 	else
 		page = (BtPage)((entry << mgr->page_bits) + mgr->pagepool);
-if( latch->leaf )
-if( page->lvl )
-abort();
+//if( latch->leaf )
+//if( page->lvl )
+//abort();
 	return page;
 }
 
@@ -1049,8 +1049,8 @@ BtPage page;
 	bt_mutexlock(latch->modify);
 	latch->pin |= CLOCK_bit;
 	latch->pin++;
-if( !latch->leaf )
-abort();
+//if( !latch->leaf )
+//abort();
 	bt_releasemutex(latch->modify);
 	bt_releasemutex(mgr->leaftable[hashidx].latch);
 	return latch;
@@ -1062,9 +1062,9 @@ trynext:
 
   entry = bt_availleaf (mgr);
   latch = mgr->leafsets + entry;
-if( latch->page_no )
-if( !latch->leaf )
-abort();
+//if( latch->page_no )
+//if( !latch->leaf )
+//abort();
 
   idx = latch->page_no % mgr->leafhash;
 
@@ -1097,9 +1097,9 @@ abort();
   //  update permanent page area in btree from buffer pool
   //	no read-lock is required since page is not pinned.
 
-if( latch->page_no )
-if( !latch->leaf )
-abort();
+//if( latch->page_no )
+//if( !latch->leaf )
+//abort();
   if( latch->dirty )
 	if( mgr->err = bt_writepage (mgr, page, latch->page_no, 1) )
 	  return mgr->line = __LINE__, mgr->err_thread = thread_no, NULL;
@@ -1206,9 +1206,9 @@ trynext:
   //  update permanent page area in btree from buffer pool
   //	no read-lock is required since page is not pinned.
 
-if( latch->page_no )
-if( latch->leaf )
-abort();
+//if( latch->page_no )
+//if( latch->leaf )
+//abort();
   if( latch->dirty )
 	if( mgr->err = bt_writepage (mgr, page, latch->page_no, 0) )
 	  return mgr->line = __LINE__, mgr->err_thread = thread_no, NULL;
@@ -1877,8 +1877,8 @@ void bt_freepage (BtMgr *mgr, BtPageSet *set, ushort thread_no)
 {
 unsigned char *freechain;
 
-if( (set->latch->pin & ~CLOCK_bit) > 1 )
-abort();
+//if( (set->latch->pin & ~CLOCK_bit) > 1 )
+//abort();
 	if( set->page->lvl )
 		freechain = mgr->pagezero->freechain;
 	else {
@@ -2031,8 +2031,8 @@ BtKey *ptr;
 		right->page = bt_mappage (mgr, right->latch);
 	else
 		return 0;
-if( right->page->lvl )
-abort();
+//if( right->page->lvl )
+//abort();
 	bt_lockpage (BtLockWrite, right->latch, thread_no, __LINE__);
 
 	// cache copy of key to update
@@ -2568,8 +2568,8 @@ uint lvl = set->page->lvl;
 BtPage page;
 BtKey *ptr;
 
-if( !lvl )
-abort();
+//if( !lvl )
+//abort();
 	// if current page is the root page, split it
 
 	if( set->latch->page_no == ROOT_page )
@@ -3001,7 +3001,7 @@ int type;
   // promote page into larger btree
 
   if( bt->main )
-   while( bt->mgr->pagezero->leafpages > bt->mgr->leaftotal - 10 )
+   while( bt->mgr->pagezero->leafpages > bt->mgr->leaftotal - *bt->thread_no )
 	if( bt_txnpromote (bt) )
 	  return bt->mgr->err;
 
