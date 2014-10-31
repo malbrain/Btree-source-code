@@ -278,17 +278,16 @@ typedef struct {
 	logseqno lsn, flushlsn;		// current & first lsn flushed
 	MutexLatch redo[1];			// redo area lite latch
 	MutexLatch lock[1];			// allocation area lite latch
-	MutexLatch maps[1];			// mapping segments lite latch
 	ushort thread_no[1];		// highest thread number issued
 	ushort err_thread;			// error thread number
 	uint nlatchpage;			// size of buffer pool & latchsets
 	uint latchtotal;			// number of page latch entries
 	uint latchhash;				// number of latch hash table slots
-	uint latchvictim;			// next latch entry to examine
+	uint latchvictim;			// next latch entry to swap out
 	uint nleafpage;				// size of leaf pool & leafsets
 	uint leaftotal;				// number of leaf latch entries
 	uint leafhash;				// number of leaf hash table slots
-	uint leafvictim;			// next leaf entry to examine
+	uint leafvictim;			// next leaf entry to swap out
 	uint leafpromote;			// next leaf entry to promote
 	uint redopage;				// page number of redo buffer
 	uint redolast;				// last msync size of recovery buff
@@ -297,12 +296,12 @@ typedef struct {
 	int line;					// last error line no
 	int found;					// number of keys found by delete
 	int reads, writes;			// number of reads and writes
+	int type;					// type of LSM tree 0=cache, 1=main
 #ifndef unix
 	HANDLE halloc;				// allocation handle
 	HANDLE hpool;				// buffer pool handle
 #endif
-	volatile uint segments;		// number of memory mapped segments
-	unsigned char *pages[64000];// memory mapped segments of b-tree
+	unsigned char *page0;		// memory mapped pagezero of b-tree
 } BtMgr;
 
 typedef struct {
@@ -600,11 +599,6 @@ cnt2++;
 	bt_releasemutex (latch->modify);
   }
 fprintf(stderr, "End flushlsn %d pages  %d pinned\n", cnt, cnt2);
-fprintf(stderr, "begin sync");
-	for( segment = 0; segment < mgr->segments; segment++ )
-	  if( msync (mgr->pages[segment], (uid)65536 << mgr->page_bits, MS_SYNC) < 0 )
-		fprintf(stderr, "msync error %d line %d\n", errno, __LINE__);
-fprintf(stderr, " end sync\n");
 }
 
 //	recovery manager -- process current recovery buff on startup
@@ -795,71 +789,19 @@ BtVal *val;
 	return lsn;
 }
 
-//	sync a single btree page to disk
-
-BTERR bt_syncpage (BtMgr *mgr, BtPage page, BtLatchSet *latch)
-{
-uint segment = latch->page_no >> 16;
-uint page_size = mgr->page_size;
-BtPage perm;
-
-	if( bt_writepage (mgr, page, latch->page_no, latch->leaf) )
-		return mgr->err;
-
-	if( !page->lvl )
-		page_size <<= mgr->leaf_xtra;
-
-	perm = (BtPage)(mgr->pages[segment] + ((latch->page_no & 0xffff) << mgr->page_bits));
-
-	if( msync (perm, page_size, MS_SYNC) < 0 )
-	  fprintf(stderr, "msync error %d line %d\n", errno, __LINE__);
-
-	latch->dirty = 0;
-	return 0;
-}
-
 //	read page into buffer pool from permanent location in Btree file
 
 BTERR bt_readpage (BtMgr *mgr, BtPage page, uid page_no, uint leaf)
 {
-int flag = PROT_READ | PROT_WRITE;
 uint page_size = mgr->page_size;
-uint off = 0, segment, fragment;
-unsigned char *perm;
 
   if( leaf )
 	page_size <<= mgr->leaf_xtra;
 
-  fragment = page_no & 0xffff;
-  segment = page_no >> 16;
-  mgr->reads++;
+  if( pread(mgr->idx, page, page_size, page_no << mgr->page_bits) < page_size )
+	return mgr->err = BTERR_read;
 
-  while( off < page_size ) {
-	if( fragment >> 16 )
-		segment++, fragment = 0;
-
-	if( segment < mgr->segments ) {
-	  perm = mgr->pages[segment] + ((uid)fragment << mgr->page_bits);
-
-	  memcpy ((unsigned char *)page + off, perm, mgr->page_size);
-	  off += mgr->page_size;
-	  fragment++;
-	  continue;
-	}
-
-	bt_mutexlock (mgr->maps);
-
-	if( segment < mgr->segments ) {
-		bt_releasemutex (mgr->maps);
-		continue;
-	}
-
-	mgr->pages[mgr->segments] = mmap (0, (uid)65536 << mgr->page_bits, flag, MAP_SHARED, mgr->idx, (uid)mgr->segments << (mgr->page_bits + 16));
-	mgr->segments++;
-
-	bt_releasemutex (mgr->maps);
-  }
-
+  __sync_fetch_and_add (&mgr->reads, 1);
   return 0;
 }
 
@@ -867,56 +809,28 @@ unsigned char *perm;
 
 BTERR bt_writepage (BtMgr *mgr, BtPage page, uid page_no, uint leaf)
 {
-int flag = PROT_READ | PROT_WRITE;
 uint page_size = mgr->page_size;
-uint off = 0, segment, fragment;
-unsigned char *perm;
 
   if( leaf )
 	page_size <<= mgr->leaf_xtra;
 
-  fragment = page_no & 0xffff;
-  segment = page_no >> 16;
-  mgr->writes++;
+  if( pwrite(mgr->idx, page, page_size, page_no << mgr->page_bits) < page_size )
+	return mgr->err = BTERR_wrt;
 
-  while( off < page_size ) {
-	if( fragment >> 16 )
-		segment++, fragment = 0;
-
-	if( segment < mgr->segments ) {
-	  perm = mgr->pages[segment] + ((uid)fragment << mgr->page_bits);
-	  memcpy (perm, (unsigned char *)page + off, mgr->page_size);
-	  off += mgr->page_size;
-	  fragment++;
-	  continue;
-	}
-
-	bt_mutexlock (mgr->maps);
-
-	if( segment < mgr->segments ) {
-		bt_releasemutex (mgr->maps);
-		continue;
-	}
-
-	mgr->pages[mgr->segments] = mmap (0, (uid)65536 << mgr->page_bits, flag, MAP_SHARED, mgr->idx, (uid)mgr->segments << (mgr->page_bits + 16));
-	mgr->segments++;
-	bt_releasemutex (mgr->maps);
-  }
-
+  __sync_fetch_and_add (&mgr->writes, 1);
   return 0;
 }
 
 //	set CLOCK bit in latch
 //	decrement pin count
 
-int value;
-
-void bt_unpinlatch (BtLatchSet *latch, ushort thread_no, uint line)
+void bt_unpinlatch (BtLatchSet *latch, uint dirty, ushort thread_no, uint line)
 {
 	bt_mutexlock(latch->modify);
+	if( dirty )
+		latch->dirty = 1;
 	latch->pin |= CLOCK_bit;
 	latch->pin--;
-
 	bt_releasemutex(latch->modify);
 }
 
@@ -1015,8 +929,8 @@ uint entry;
 BtLatchSet *bt_pinleaf (BtMgr *mgr, uid page_no, ushort thread_no)
 {
 uint hashidx = page_no % mgr->leafhash;
+uint entry, oldidx;
 BtLatchSet *latch;
-uint entry, idx;
 BtPage page;
 
   //  try to find our entry
@@ -1050,33 +964,17 @@ trynext:
   entry = bt_availleaf (mgr);
   latch = mgr->leafsets + entry;
 
-  idx = latch->page_no % mgr->leafhash;
+  page = (BtPage)(((uid)entry << mgr->page_bits << mgr->leaf_xtra) + mgr->leafpool);
+  oldidx = latch->page_no % mgr->leafhash;
 
-  //  if latch is on a different hash chain
-  //	unlink from the old page_no chain
+  //  skip over this entry if old latch is not available
 
   if( latch->page_no )
-   if( idx != hashidx ) {
-
-	//  skip over this entry if latch not available
-
-    if( !bt_mutextry (mgr->leaftable[idx].latch) ) {
+   if( oldidx != hashidx )
+    if( !bt_mutextry (mgr->leaftable[oldidx].latch) ) {
 	  bt_releasemutex(latch->modify);
 	  goto trynext;
 	}
-
-	if( latch->prev )
-	  mgr->leafsets[latch->prev].next = latch->next;
-	else
-	  mgr->leaftable[idx].entry = latch->next;
-
-	if( latch->next )
-	  mgr->leafsets[latch->next].prev = latch->prev;
-
-    bt_releasemutex (mgr->leaftable[idx].latch);
-   }
-
-  page = (BtPage)(((uid)entry << mgr->page_bits << mgr->leaf_xtra) + mgr->leafpool);
 
   //  update permanent page area in btree from buffer pool
   //	no read-lock is required since page is not pinned.
@@ -1087,8 +985,24 @@ trynext:
 	else
 	  latch->dirty = 0;
 
+  //  if latch is on a different hash chain
+  //	unlink from the old page_no chain
+
+  if( latch->page_no )
+   if( oldidx != hashidx ) {
+	if( latch->prev )
+	  mgr->leafsets[latch->prev].next = latch->next;
+	else
+	  mgr->leaftable[oldidx].entry = latch->next;
+
+	if( latch->next )
+	  mgr->leafsets[latch->next].prev = latch->prev;
+
+    bt_releasemutex (mgr->leaftable[oldidx].latch);
+   }
+
   if( bt_readpage (mgr, page, page_no, 1) )
-	return mgr->line = __LINE__, NULL;
+	return mgr->line = __LINE__, mgr->err_thread = thread_no, NULL;
 
   //  link page as head of hash table chain
   //  if this is a never before used entry,
@@ -1097,7 +1011,7 @@ trynext:
   //  leave it in its current hash table
   //  chain position.
 
-  if( !latch->page_no || hashidx != idx ) {
+  if( !latch->page_no || hashidx != oldidx ) {
 	if( latch->next = mgr->leaftable[hashidx].entry )
 	  mgr->leafsets[latch->next].prev = entry;
 
@@ -1122,8 +1036,8 @@ trynext:
 BtLatchSet *bt_pinlatch (BtMgr *mgr, uid page_no, ushort thread_no)
 {
 uint hashidx = page_no % mgr->latchhash;
+uint entry, oldidx;
 BtLatchSet *latch;
-uint entry, idx;
 BtPage page;
 
   //  try to find our entry
@@ -1156,33 +1070,17 @@ trynext:
   entry = bt_availnext (mgr);
   latch = mgr->latchsets + entry;
 
-  idx = latch->page_no % mgr->latchhash;
+  page = (BtPage)(((uid)entry << mgr->page_bits) + mgr->pagepool);
+  oldidx = latch->page_no % mgr->latchhash;
 
-  //  if latch is on a different hash chain
-  //	unlink from the old page_no chain
+  //  skip over this entry if latch not available
 
   if( latch->page_no )
-   if( idx != hashidx ) {
-
-	//  skip over this entry if latch not available
-
-    if( !bt_mutextry (mgr->hashtable[idx].latch) ) {
+   if( oldidx != hashidx )
+    if( !bt_mutextry (mgr->hashtable[oldidx].latch) ) {
 	  bt_releasemutex(latch->modify);
 	  goto trynext;
 	}
-
-	if( latch->prev )
-	  mgr->latchsets[latch->prev].next = latch->next;
-	else
-	  mgr->hashtable[idx].entry = latch->next;
-
-	if( latch->next )
-	  mgr->latchsets[latch->next].prev = latch->prev;
-
-    bt_releasemutex (mgr->hashtable[idx].latch);
-   }
-
-  page = (BtPage)(((uid)entry << mgr->page_bits) + mgr->pagepool);
 
   //  update permanent page area in btree from buffer pool
   //	no read-lock is required since page is not pinned.
@@ -1192,6 +1090,22 @@ trynext:
 	  return mgr->line = __LINE__, mgr->err_thread = thread_no, NULL;
 	else
 	  latch->dirty = 0;
+
+  //  if latch is on a different hash chain
+  //	unlink from the old page_no chain
+
+  if( latch->page_no )
+   if( oldidx != hashidx ) {
+	if( latch->prev )
+	  mgr->latchsets[latch->prev].next = latch->next;
+	else
+	  mgr->hashtable[oldidx].entry = latch->next;
+
+	if( latch->next )
+	  mgr->latchsets[latch->next].prev = latch->prev;
+
+    bt_releasemutex (mgr->hashtable[oldidx].latch);
+   }
 
   if( bt_readpage (mgr, page, page_no, 0) )
 	return mgr->line = __LINE__, NULL;
@@ -1203,7 +1117,7 @@ trynext:
   //  leave it in its current hash table
   //  chain position.
 
-  if( !latch->page_no || hashidx != idx ) {
+  if( !latch->page_no || hashidx != oldidx ) {
 	if( latch->next = mgr->hashtable[hashidx].entry )
 	  mgr->latchsets[latch->next].prev = entry;
 
@@ -1224,11 +1138,12 @@ trynext:
   
 void bt_mgrclose (BtMgr *mgr)
 {
+char *name = mgr->type ? "Main" : "Cache";
 BtLatchSet *latch;
 BtLogHdr *eof;
 uint num = 0;
 BtPage page;
-uint slot;
+uint entry;
 
 	//	flush previously written dirty pages
 	//	and write recovery buffer to disk
@@ -1242,9 +1157,9 @@ uint slot;
 
 	//	write remaining dirty pool pages to the btree
 
-	for( slot = 1; slot < mgr->latchtotal; slot++ ) {
-		page = (BtPage)(((uid)slot << mgr->page_bits) + mgr->pagepool);
-		latch = mgr->latchsets + slot;
+	for( entry = 1; entry < mgr->latchtotal; entry++ ) {
+		page = (BtPage)(((uid)entry << mgr->page_bits) + mgr->pagepool);
+		latch = mgr->latchsets + entry;
 
 		if( latch->dirty ) {
 			bt_writepage(mgr, page, latch->page_no, 0);
@@ -1252,17 +1167,25 @@ uint slot;
 		}
 	}
 
+	if( num )
+	  fprintf(stderr, "%s %d non-leaf buffer pool pages flushed\n", name, num);
+
+	num = 0;
+
 	//	write remaining dirty leaf pages to the btree
 
-	for( slot = 1; slot < mgr->leaftotal; slot++ ) {
-		page = (BtPage)(((uid)slot << mgr->page_bits << mgr->leaf_xtra) + mgr->leafpool);
-		latch = mgr->leafsets + slot;
+	for( entry = 1; entry < mgr->leaftotal; entry++ ) {
+		page = (BtPage)(((uid)entry << mgr->page_bits << mgr->leaf_xtra) + mgr->leafpool);
+		latch = mgr->leafsets + entry;
 
 		if( latch->dirty ) {
 			bt_writepage(mgr, page, latch->page_no, 1);
 			latch->dirty = 0, num++;
 		}
 	}
+
+	if( num )
+	  fprintf(stderr, "%s %d leaf buffer pool pages flushed\n", name, num);
 
 	//	clear redo recovery buffer on disk.
 
@@ -1274,11 +1197,8 @@ uint slot;
 		  fprintf(stderr, "msync error %d line %d\n", errno, __LINE__);
 	}
 
-	fprintf(stderr, "%d buffer pool pages flushed\n", num);
-
 #ifdef unix
-	while( mgr->segments )
-		munmap (mgr->pages[--mgr->segments], (uid)65536 << mgr->page_bits);
+	munmap (mgr->page0, (uid)(mgr->redopage + mgr->pagezero->redopages) << mgr->page_bits);
 
 	munmap (mgr->pagepool, (uid)mgr->nlatchpage << mgr->page_bits);
 	munmap (mgr->leafpool, (uid)mgr->nleafpage << mgr->page_bits);
@@ -1294,7 +1214,6 @@ uint slot;
 	close (mgr->idx);
 	free (mgr);
 #else
-	VirtualFree (mgr->redobuff, 0, MEM_RELEASE);
 	FlushFileBuffers(mgr->idx);
 	CloseHandle(mgr->idx);
 	GlobalFree (mgr);
@@ -1311,7 +1230,7 @@ void bt_close (BtDb *bt)
 //  open/create new btree buffer manager
 
 //	call with file_name, BT_openmode, bits in page size (e.g. 16),
-//		size of page pool (e.g. 262144) and leaf pool
+//		size of page pool (e.g. 300) and leaf pool (e.g. 4000)
 
 BtMgr *bt_mgr (char *name, uint pagebits, uint leafxtra, uint nodemax, uint leafmax, uint redopages)
 {
@@ -1369,6 +1288,7 @@ BtVal *val;
 			if( pagezero->page_bits ) {
 				pagebits = pagezero->page_bits;
 				leafxtra = pagezero->leaf_xtra;
+				redopages = pagezero->redopages;
 			} else
 				initit = 1;
 		else
@@ -1384,6 +1304,7 @@ BtVal *val;
 			return bt_mgrclose (mgr), NULL;
 		pagebits = pagezero->page_bits;
 		leafxtra = pagezero->leaf_xtra;
+		redopages = pagezero->redopages;
 	} else
 		initit = 1;
 #endif
@@ -1484,19 +1405,18 @@ mgrlatch:
 	// mlock the first segment of 64K pages
 
 	flag = PROT_READ | PROT_WRITE;
-	mgr->pages[0] = mmap (0, (uid)65536 << mgr->page_bits, flag, MAP_SHARED, mgr->idx, 0);
-	mgr->segments = 1;
+	mgr->page0 = mmap (0, (uid)(mgr->redopage + redopages) << mgr->page_bits, flag, MAP_SHARED, mgr->idx, 0);
 
-	if( mgr->pages[0] == MAP_FAILED ) {
-		fprintf (stderr, "Unable to mmap first btree segment, error = %d\n", errno);
+	if( mgr->page0 == MAP_FAILED ) {
+		fprintf (stderr, "Unable to mmap pagezero btree segment, error = %d\n", errno);
 		return bt_mgrclose (mgr), NULL;
 	}
 
-	mgr->pagezero = (BtPageZero *)mgr->pages[0];
+	mgr->pagezero = (BtPageZero *)mgr->page0;
 	mlock (mgr->pagezero, mgr->page_size);
 
-	mgr->redobuff = mgr->pages[0] + (mgr->redopage << mgr->page_bits);
-	mlock (mgr->redobuff, mgr->pagezero->redopages << mgr->page_bits);
+	mgr->redobuff = mgr->page0 + (mgr->redopage << mgr->page_bits);
+	mlock (mgr->redobuff, redopages << mgr->page_bits);
 
 	//	allocate pool buffers
 
@@ -1519,6 +1439,11 @@ mgrlatch:
 	mgr->leafsets = (BtLatchSet *)(mgr->leafpool + ((uid)mgr->leaftotal << mgr->page_bits << mgr->leaf_xtra));
 	mgr->leaftable = (BtHashEntry *)(mgr->leafsets + mgr->leaftotal);
 	mgr->leafhash = (mgr->leafpool + ((uid)mgr->nleafpage << mgr->page_bits) - (unsigned char *)mgr->leaftable) / sizeof(BtHashEntry);
+
+	for( idx = 1; idx < mgr->leaftotal; idx++ ) {
+		latch = mgr->leafsets + idx;
+		latch->leaf = 1;
+	}
 
 	return mgr;
 }
@@ -1620,7 +1545,7 @@ void bt_unlockpage(BtLock mode, BtLatchSet *latch, ushort thread_no, uint line)
 
 int bt_newpage(BtMgr *mgr, BtPageSet *set, BtPage contents, ushort thread_no)
 {
-uint page_size = mgr->page_size, page_xtra = 0;
+uint page_size = mgr->page_size, leaf_xtra = 0;
 unsigned char *freechain;
 uid page_no;
 
@@ -1630,8 +1555,8 @@ uid page_no;
 	} else {
 		freechain = mgr->pagezero->leafchain;
 		mgr->pagezero->leafpages++;
-		page_xtra = mgr->leaf_xtra;
-		page_size <<= page_xtra;
+		leaf_xtra = mgr->leaf_xtra;
+		page_size <<= leaf_xtra;
 	}
 
 	//	lock allocation page
@@ -1657,7 +1582,6 @@ uid page_no;
 
 		contents->page_no = page_no;
 		contents->nopromote = 0;
-		set->latch->dirty = 1;
 
 		memcpy (set->page, contents, page_size);
 
@@ -1669,20 +1593,23 @@ uid page_no;
 	}
 
 	page_no = bt_getid(mgr->pagezero->alloc->right);
-	bt_putid(mgr->pagezero->alloc->right, page_no+(1 << page_xtra));
+	bt_putid(mgr->pagezero->alloc->right, page_no+(1 << leaf_xtra));
 
 	// unlock allocation latch and
 	//	extend file into new page.
 
 //	if( msync (mgr->pagezero, mgr->page_size, MS_SYNC) < 0 )
 //	  fprintf(stderr, "msync error %d line %d\n", errno, __LINE__);
+
 	bt_releasemutex(mgr->lock);
 
 	//	keep bt_promote out of this page
 	contents->nopromote = 1;
 	contents->page_no = page_no;
+
 	if( pwrite (mgr->idx, contents, page_size, page_no << mgr->page_bits) < page_size )
 		fprintf(stderr, "Write %d error %d\n", (uint)page_no, errno);
+
 	if( set->latch = contents->lvl ? bt_pinlatch (mgr, page_no, thread_no) : bt_pinleaf (mgr, page_no, thread_no) )
 		set->page = bt_mappage (mgr, set->latch);
 	else
@@ -1691,7 +1618,6 @@ uid page_no;
 	// now pin will keep bt_promote out
 
 	set->page->nopromote = 0;
-	set->latch->dirty = 1;
 	return 0;
 }
 
@@ -1761,7 +1687,7 @@ BtKey *ptr;
 
 	if( prevpage_no ) {
 	  bt_unlockpage(prevmode, prevlatch, thread_no, __LINE__);
-	  bt_unpinlatch (prevlatch, thread_no, __LINE__);
+	  bt_unpinlatch (prevlatch, 0, thread_no, __LINE__);
 	  prevpage_no = 0;
 	}
 
@@ -1789,7 +1715,7 @@ BtKey *ptr;
 
 		if( lock != BtLockRead && drill == lvl ) {
 		  bt_unlockpage(mode, set->latch, thread_no, __LINE__);
-		  bt_unpinlatch (set->latch, thread_no, __LINE__);
+		  bt_unpinlatch (set->latch, 0, thread_no, __LINE__);
 		  continue;
 		}
 	}
@@ -1878,7 +1804,6 @@ unsigned char *freechain;
 
 	memcpy(set->page->right, freechain, BtId);
 	bt_putid(freechain, set->latch->page_no);
-	set->latch->dirty = 1;
 	set->page->free = 1;
 
 //	if( msync (mgr->pagezero, mgr->page_size, MS_SYNC) < 0 )
@@ -1889,7 +1814,7 @@ unsigned char *freechain;
 
 	bt_unlockpage (BtLockDelete, set->latch, thread_no, __LINE__);
 	bt_unlockpage (BtLockWrite, set->latch, thread_no, __LINE__);
-	bt_unpinlatch (set->latch, thread_no, __LINE__);
+	bt_unpinlatch (set->latch, 1, thread_no, __LINE__);
 	bt_releasemutex (mgr->lock);
 }
 
@@ -1908,7 +1833,6 @@ uint idx;
 	ptr = keyptr(set->page, set->page->cnt);
 	memcpy (rightkey, ptr, ptr->len + sizeof(BtKey));
 	memset (slotptr(set->page, set->page->cnt--), 0, sizeof(BtSlot));
-	set->latch->dirty = 1;
 
 	//  cache new fence value
 
@@ -1934,7 +1858,7 @@ uint idx;
 		return mgr->err_thread = thread_no, mgr->err;
 
 	bt_unlockpage (BtLockParent, set->latch, thread_no, __LINE__);
-	bt_unpinlatch(set->latch, thread_no, __LINE__);
+	bt_unpinlatch(set->latch, 1, thread_no, __LINE__);
 	return 0;
 }
 
@@ -1971,14 +1895,12 @@ uint idx;
 	bt_lockpage (BtLockWrite, child->latch, thread_no, __LINE__);
 
 	memcpy (root->page, child->page, mgr->page_size);
-	root->latch->dirty = 1;
-
 	bt_freepage (mgr, child, thread_no);
 
   } while( root->page->lvl > 1 && root->page->act == 1 );
 
   bt_unlockpage (BtLockWrite, root->latch, thread_no, __LINE__);
-  bt_unpinlatch (root->latch, thread_no, __LINE__);
+  bt_unpinlatch (root->latch, 1, thread_no, __LINE__);
   return 0;
 }
 
@@ -2030,7 +1952,6 @@ BtKey *ptr;
 	bt_unlockpage (BtLockLink, set->latch, thread_no, __LINE__);
 
 	set->page->page_no = set->latch->page_no;
-	set->latch->dirty = 1;
 
 	//  fix left link from far right page
 
@@ -2043,7 +1964,7 @@ BtKey *ptr;
       bt_lockpage(BtLockLink, temp->latch, thread_no, __LINE__);
 	  bt_putid (temp->page->left, set->latch->page_no);
 	  bt_unlockpage(BtLockLink, temp->latch, thread_no, __LINE__);
-	  bt_unpinlatch (temp->latch, thread_no, __LINE__);
+	  bt_unpinlatch (temp->latch, 1, thread_no, __LINE__);
 	} else if( !lvl ) {	// our page is now rightmost leaf
 	  bt_mutexlock (mgr->lock);
 	  bt_putid (mgr->pagezero->alloc->left, set->latch->page_no);
@@ -2052,7 +1973,6 @@ BtKey *ptr;
 
 	// mark right page deleted and release lock
 
-	right->latch->dirty = 1;
 	right->page->kill = 1;
 	bt_unlockpage (BtLockWrite, right->latch, thread_no, __LINE__);
 
@@ -2073,7 +1993,7 @@ BtKey *ptr;
 	  return mgr->err;
 
 	bt_unlockpage (BtLockWrite, set->latch, thread_no, __LINE__);
-	bt_unpinlatch (set->latch, thread_no, __LINE__);
+	bt_unpinlatch (set->latch, 1, thread_no, __LINE__);
 
 	//	obtain delete and write locks to right node
 
@@ -2154,9 +2074,8 @@ BtVal *val;
  	if( !set->page->act )
 	  return bt_deletepage (mgr, set, thread_no, set->page->lvl);
 
-	set->latch->dirty = 1;
 	bt_unlockpage(BtLockWrite, set->latch, thread_no, __LINE__);
-	bt_unpinlatch (set->latch, thread_no, __LINE__);
+	bt_unpinlatch (set->latch, 1, thread_no, __LINE__);
 	return 0;
 }
 
@@ -2194,7 +2113,6 @@ BtVal *val;
 	// skip page info and set rest of page to zero
 
 	memset (page+1, 0, page_size - sizeof(*page));
-	set->latch->dirty = 1;
 
 	page->min = page_size;
 	page->garbage = 0;
@@ -2277,7 +2195,7 @@ BtVal *val;
 		return mgr->err_thread = thread_no, mgr->err;
 
 	left_page_no = left->latch->page_no;
-	bt_unpinlatch (left->latch, thread_no, __LINE__);
+	bt_unpinlatch (left->latch, 1, thread_no, __LINE__);
 	free (frame);
 
 	//	left link the pages together
@@ -2330,9 +2248,9 @@ BtVal *val;
 	// release and unpin root pages
 
 	bt_unlockpage(BtLockWrite, root->latch, thread_no, __LINE__);
-	bt_unpinlatch (root->latch, thread_no, __LINE__);
+	bt_unpinlatch (root->latch, 1, thread_no, __LINE__);
 
-	bt_unpinlatch (right, thread_no, __LINE__);
+	bt_unpinlatch (right, 1, thread_no, __LINE__);
 	return 0;
 }
 
@@ -2424,7 +2342,7 @@ uint prev;
       bt_lockpage(BtLockLink, temp->latch, thread_no, __LINE__);
 	  bt_putid (temp->page->left, right->latch->page_no);
 	  bt_unlockpage(BtLockLink, temp->latch, thread_no, __LINE__);
-	  bt_unpinlatch (temp->latch, thread_no, __LINE__);
+	  bt_unpinlatch (temp->latch, 1, thread_no, __LINE__);
 	 } else if( !lvl ) {	// page is rightmost leaf
 	  bt_mutexlock (mgr->lock);
 	  bt_putid (mgr->pagezero->alloc->left, right->latch->page_no);
@@ -2435,7 +2353,6 @@ uint prev;
 
 	memcpy (frame, set->page, page_size);
 	memset (set->page+1, 0, page_size - sizeof(*set->page));
-	set->latch->dirty = 1;
 
 	set->page->min = page_size;
 	set->page->garbage = 0;
@@ -2516,7 +2433,7 @@ uid right2;
       bt_lockpage(BtLockLink, temp->latch, thread_no, __LINE__);
 	  bt_putid (temp->page->left, right->page_no);
 	  bt_unlockpage(BtLockLink, temp->latch, thread_no, __LINE__);
-	  bt_unpinlatch (temp->latch, thread_no, __LINE__);
+	  bt_unpinlatch (temp->latch, 1, thread_no, __LINE__);
 	} else if( !lvl ) {  // right page is far right page
 	  bt_mutexlock (mgr->lock);
 	  bt_putid (mgr->pagezero->alloc->left, right->page_no);
@@ -2546,10 +2463,10 @@ uid right2;
 		return mgr->err_thread = thread_no, mgr->err;
 
 	bt_unlockpage (BtLockParent, set->latch, thread_no, __LINE__);
-	bt_unpinlatch (set->latch, thread_no, __LINE__);
+	bt_unpinlatch (set->latch, 1, thread_no, __LINE__);
 
 	bt_unlockpage (BtLockParent, right, thread_no, __LINE__);
-	bt_unpinlatch (right, thread_no, __LINE__);
+	bt_unpinlatch (right, 1, thread_no, __LINE__);
 	return 0;
 }
 
@@ -2637,7 +2554,6 @@ int rate;
 		--idx;
 	}
 
-	set->latch->dirty = 1;
 	set->page->act++;
 
 	//	fill in new slot
@@ -2715,7 +2631,6 @@ BtVal *val;
 	  node->dead = 0;
 
 	  set->page->garbage += val->len - vallen;
-	  set->latch->dirty = 1;
 	  val->len = vallen;
 	  memcpy (val->value, value, vallen);
 	  goto insxit;
@@ -2749,7 +2664,6 @@ BtVal *val;
   memcpy (val->value, value, vallen);
   val->len = vallen;
 
-  set->latch->dirty = 1;
   set->page->min -= keylen + sizeof(BtKey);
   ptr = (BtKey*)((unsigned char *)set->page + set->page->min);
   memcpy (ptr->key, key, keylen);
@@ -2759,7 +2673,7 @@ BtVal *val;
 
 insxit:
   bt_unlockpage(BtLockWrite, set->latch, thread_no, __LINE__);
-  bt_unpinlatch (set->latch, thread_no, __LINE__);
+  bt_unpinlatch (set->latch, 1, thread_no, __LINE__);
   return 0;
 }
 
@@ -2875,7 +2789,6 @@ BtVal *val;
 		return 0;
 
 	set->page->garbage += ptr->len + val->len + sizeof(BtKey) + sizeof(BtVal);
-	set->latch->dirty = 1;
 	set->page->lsn = lsn;
  	set->page->act--;
 
@@ -2895,7 +2808,7 @@ BtLatchSet *latch = mgr->leafsets + entry;
 
 	latch->split = 0;
 	bt_unlockpage(BtLockWrite, latch, thread_no, __LINE__);
-	bt_unpinlatch(latch, thread_no, __LINE__);
+	bt_unpinlatch(latch, 1, thread_no, __LINE__);
 }
 
 int qsortcmp (BtSlot *slot1, BtSlot *slot2, BtPage page)
@@ -3066,7 +2979,6 @@ BtVal *val;
 		memcpy (prev->page, set->page, mgr->page_size << mgr->leaf_xtra);
 		bt_lockpage (BtLockDelete, set->latch, thread_no, __LINE__);
 		prev->latch->split = set->latch->split;
-		prev->latch->dirty = 1;
 		bt_freepage (mgr, set, thread_no);
 		continue;
 	  }
@@ -3095,10 +3007,6 @@ BtVal *val;
 	  // splice in the left link into the split page
 
 	  bt_putid (set->page->left, prev->latch->page_no);
-
-	  if( lsm )
-		bt_syncpage (mgr, prev->page, prev->latch);
-
 	  *prev = *set;
 	}
 
@@ -3117,10 +3025,8 @@ BtVal *val;
 
 	    bt_lockpage (BtLockLink, set->latch, thread_no, __LINE__);
 	    bt_putid (set->page->left, prev->latch->page_no);
-		set->latch->dirty = 1;
-
 	    bt_unlockpage (BtLockLink, set->latch, thread_no, __LINE__);
-		bt_unpinlatch (set->latch, thread_no, __LINE__);
+		bt_unpinlatch (set->latch, 1, thread_no, __LINE__);
 	  } else {	// prev is rightmost page
 	    bt_mutexlock (mgr->lock);
 		bt_putid (mgr->pagezero->alloc->left, prev->latch->page_no);
@@ -3136,9 +3042,6 @@ BtVal *val;
 	  if( bt_insertkey (mgr, ptr->key, ptr->len, 1, value, BtId, Update, thread_no) )
 		return mgr->err;
 
-	  if( lsm )
-		bt_syncpage (mgr, prev->page, prev->latch);
-
 	  //  unlock and unpin the split pages
 
 	  bt_atomicrelease (mgr, latch->split, thread_no);
@@ -3147,7 +3050,7 @@ BtVal *val;
 
 	  latch->split = 0;
 	  bt_unlockpage(BtLockWrite, latch, thread_no, __LINE__);
-	  bt_unpinlatch(latch, thread_no, __LINE__);
+	  bt_unpinlatch(latch, 1, thread_no, __LINE__);
 	  continue;
 	}
 
@@ -3156,11 +3059,7 @@ BtVal *val;
 
 	if( prev->page->act ) {
 	  bt_unlockpage(BtLockWrite, prev->latch, thread_no, __LINE__);
-
-	  if( lsm )
-		bt_syncpage (mgr, prev->page, prev->latch);
-
-	  bt_unpinlatch(prev->latch, thread_no, __LINE__);
+	  bt_unpinlatch(prev->latch, 1, thread_no, __LINE__);
 	  continue;
 	}
 
@@ -3285,13 +3184,13 @@ uint slot;
 	if( slot == set->page->cnt )
 	  if( !bt_getid (set->page->right) ) {
 		bt_unlockpage (BtLockRead, set->latch, bt->thread_no, __LINE__);
-		bt_unpinlatch (set->latch, bt->thread_no, __LINE__);
+		bt_unpinlatch (set->latch, 0, bt->thread_no, __LINE__);
 		continue;
 	}
 
 	if( keycmp (ptr, key, keylen) ) {
 		bt_unlockpage (BtLockRead, set->latch, bt->thread_no, __LINE__);
-		bt_unpinlatch (set->latch, bt->thread_no, __LINE__);
+		bt_unpinlatch (set->latch, 0, bt->thread_no, __LINE__);
 		continue;
 	}
 
@@ -3318,12 +3217,12 @@ uint slot;
 findxit:
   if( type < 2 ) {
 	bt_unlockpage (BtLockRead, set->latch, bt->thread_no, __LINE__);
-	bt_unpinlatch (set->latch, bt->thread_no, __LINE__);
+	bt_unpinlatch (set->latch, 0, bt->thread_no, __LINE__);
   }
   return ret;
 }
 
-//	set cursor to highest slot on left-most page
+//	set cursor to highest slot on right-most page
 
 BTERR bt_lastkey (BtDb *bt)
 {
@@ -3369,7 +3268,7 @@ uid next, us = set->latch->page_no;
 
 	do {
 	  bt_unlockpage(BtLockRead, set->latch, thread_no, __LINE__);
-	  bt_unpinlatch (set->latch, thread_no, __LINE__);
+	  bt_unpinlatch (set->latch, 0, thread_no, __LINE__);
 
 	  if( set->latch = bt_pinleaf (mgr, next, thread_no) )
 	    set->page = bt_mappage (mgr, set->latch);
@@ -3475,7 +3374,7 @@ uid page_no;
 		return 0;
 
 	bt_unlockpage(BtLockRead, set->latch, thread_no, __LINE__);
-	bt_unpinlatch (set->latch, thread_no, __LINE__);
+	bt_unpinlatch (set->latch, 0, thread_no, __LINE__);
 
 	if( page_no = bt_getid(set->page->right) )
 	  if( set->latch = bt_pinleaf (mgr, page_no, thread_no) )
@@ -3670,6 +3569,9 @@ uint entry;
 	for( entry = 0; ++entry < mgr->latchtotal; ) {
 		latch = mgr->latchsets + entry;
 
+		if( latch->leaf )
+			fprintf(stderr, "%s latchset %d is a leaf on page %d\n", type, entry, latch->page_no);
+
 		if( *latch->modify->value )
 			fprintf(stderr, "%s latchset %d modifylocked for page %d\n", type, entry, latch->page_no);
 
@@ -3679,6 +3581,9 @@ uint entry;
 
 	for( entry = 0; ++entry < mgr->leaftotal; ) {
 		latch = mgr->leafsets + entry;
+
+		if( !latch->leaf )
+			fprintf(stderr, "%s leafset %d is not a leaf on page %d\n", type, entry, latch->page_no);
 
 		if( *latch->modify->value )
 			fprintf(stderr, "%s leafset %d modifylocked for page %d\n", type, entry, latch->page_no);
@@ -3713,8 +3618,8 @@ unsigned char key[BT_maxkey];
 unsigned char buff[65536];
 uint nxt = sizeof(buff);
 ThreadArg *args = arg;
-BtPage page, frame;
 BtPageSet set[1];
+BtPage page;
 int vallen;
 BtKey *ptr;
 BtVal *val;
@@ -3856,10 +3761,10 @@ FILE *in;
 	    }
 
 		bt_unlockpage(BtLockRead, bt->cacheset->latch, bt->thread_no, __LINE__);
-		bt_unpinlatch (bt->cacheset->latch, bt->thread_no, __LINE__);
+		bt_unpinlatch (bt->cacheset->latch, 0, bt->thread_no, __LINE__);
 
 		bt_unlockpage(BtLockRead, bt->mainset->latch, bt->thread_no, __LINE__);
-		bt_unpinlatch (bt->mainset->latch, bt->thread_no, __LINE__);
+		bt_unpinlatch (bt->mainset->latch, 0, bt->thread_no, __LINE__);
 
 		fprintf(stderr, " Total keys read %d\n", cnt);
 		break;
@@ -3893,49 +3798,53 @@ FILE *in;
 	    }
 
 		bt_unlockpage(BtLockRead, bt->cacheset->latch, bt->thread_no, __LINE__);
-		bt_unpinlatch (bt->cacheset->latch, bt->thread_no, __LINE__);
+		bt_unpinlatch (bt->cacheset->latch, 0, bt->thread_no, __LINE__);
 
 		bt_unlockpage(BtLockRead, bt->mainset->latch, bt->thread_no, __LINE__);
-		bt_unpinlatch (bt->mainset->latch, bt->thread_no, __LINE__);
+		bt_unpinlatch (bt->mainset->latch, 0, bt->thread_no, __LINE__);
 
 		fprintf(stderr, " Total keys read %d\n", cnt);
 		break;
 
 	case 'c':
 		fprintf(stderr, "started counting LSM cache btree\n");
+		next = bt->mgr->redopage + bt->mgr->pagezero->redopages;
 		page_no = LEAF_page;
 
-		do {
-		  if( set->latch = bt_pinleaf (bt->mgr, page_no, bt->thread_no) )
-		  	set->page = bt_mappage (bt->mgr, set->latch);
+#ifdef unix
+		posix_fadvise( bt->mgr->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
+		while( page_no < bt_getid(bt->mgr->pagezero->alloc->right) ) {
+		  pread(bt->mgr->idx, page, sizeof(*page), page_no << bt->mgr->page_bits);
+		  if( !page->lvl && !page->free )
+		    cnt += page->act;
+		  if( next )
+		  	page_no = next;
 		  else
-	  		return 0;
-
-		  bt_lockpage(BtLockRead, set->latch, bt->thread_no, __LINE__);
-		  cnt += set->page->act;
-		  page_no = bt_getid (set->page->right);
-		  bt_unlockpage(BtLockRead, set->latch, bt->thread_no, __LINE__);
-		  bt_unpinlatch (set->latch, bt->thread_no, __LINE__);
-		} while( page_no );
+			page_no += page->lvl ? 1 : (1 << bt->mgr->leaf_xtra);
+		  next = 0;
+		}
 		
 	  	cachecnt = --cnt;	// remove stopper key
 		cnt = 0;
 
 		fprintf(stderr, "started counting LSM main btree\n");
+		next = bt->main->redopage + bt->main->pagezero->redopages;
 		page_no = LEAF_page;
 
-		do {
-		  if( set->latch = bt_pinleaf (bt->main, page_no, bt->thread_no) )
-		  	set->page = bt_mappage (bt->main, set->latch);
+#ifdef unix
+		posix_fadvise( bt->main->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
+		while( page_no < bt_getid(bt->main->pagezero->alloc->right) ) {
+		  pread(bt->main->idx, page, sizeof(*page), page_no << bt->main->page_bits);
+		  if( !page->lvl )
+		    cnt += page->act;
+		  if( next )
+		  	page_no = next;
 		  else
-	  		return 0;
-
-		  bt_lockpage(BtLockRead, set->latch, bt->thread_no, __LINE__);
-		  cnt += set->page->act;
-		  page_no = bt_getid (set->page->right);
-		  bt_unlockpage(BtLockRead, set->latch, bt->thread_no, __LINE__);
-		  bt_unpinlatch (set->latch, bt->thread_no, __LINE__);
-		} while( page_no );
+			page_no += page->lvl ? 1 : (1 << bt->main->leaf_xtra);
+		  next = 0;
+		}
 		
 	  	cnt--;	// remove stopper key
 
@@ -4050,7 +3959,8 @@ BtKey *ptr;
 	if( !mgr ) {
 		fprintf(stderr, "Index Open Error %s\n", argv[1]);
 		exit (1);
-	}
+	} else
+		mgr->type = 0;
 
 	if( mainbits ) {
 		main = bt_mgr (argv[2], mainbits, mainleafxtra, mainpool, mainleafpool, 0);
@@ -4058,7 +3968,8 @@ BtKey *ptr;
 		if( !main ) {
 			fprintf(stderr, "Index Open Error %s\n", argv[2]);
 			exit (1);
-		}
+		} else
+			main->type = 1;
 	} else
 		main = NULL;
 
@@ -4109,9 +4020,10 @@ BtKey *ptr;
 	if( main )
 		fprintf(stderr, "main %lld leaves %lld upper %d reads %d writes %d found\n", main->pagezero->leafpages, main->pagezero->upperpages, main->reads, main->writes, main->found);
 
+	bt_mgrclose (mgr);
+
 	if( main )
 		bt_mgrclose (main);
-	bt_mgrclose (mgr);
 
 	elapsed = getCpuTime(0) - start;
 	fprintf(stderr, " real %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
