@@ -451,7 +451,7 @@ MutexLatch prev[1];
 	waited++;
   }
 
-  sys_futex (latch->value, FUTEX_WAIT_PRIVATE, *prev->value, NULL, NULL, 0);
+  sys_futex (latch->value, FUTEX_WAIT, *prev->value, NULL, NULL, 0);
  }
 }
 
@@ -467,7 +467,7 @@ MutexLatch prev[1];
 	*prev->value = __sync_fetch_and_and (latch->value, 0xffff0000);
 
 	if( *prev->bits->waiters )
-		sys_futex( latch->value, FUTEX_WAKE_PRIVATE, 1, NULL, NULL, 0 );
+		sys_futex( latch->value, FUTEX_WAKE, 1, NULL, NULL, 0 );
 }
 
 //	reader/writer lock implementation
@@ -955,7 +955,7 @@ mgrlatch:
 	}
 
 	mgr->pagezero = (BtPageZero *)mgr->pages[0];
-	mlock (mgr->pagezero, mgr->page_size);
+//	mlock (mgr->pagezero, mgr->page_size);
 
 	//	allocate latch pool
 
