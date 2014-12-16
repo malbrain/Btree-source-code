@@ -1,7 +1,7 @@
 Btree-source-code
 =================
 
-A working project for High-concurrency B-tree source code in C.  You probably want to download threadskv10g.c for the latest developement version.
+A working project for High-concurrency B-tree source code in C.  You probably want to download threadskv10h.c for the latest developement version.
 
 Here are files in the btree source code:
 
@@ -35,11 +35,11 @@ threadskv7.c	Multi-Threaded/Single-Process with atomic add of a set of keys unde
 
 threadskv8.c	Multi-Threaded/Single-Process with atomic-consistent add of a set of keys based on threadskv6.c.  Uses btree page latches as locking granularity.
 
-threadskv10g.c	Multi-Threaded/Single-Process with 2 Log-Structured-Merge (LSM) btrees based on threadskv8.c. Also adds dual leaf/interior node page sizes.
+threadskv10h.c	Multi-Threaded/Multi-Process with 2 Log-Structured-Merge (LSM) btrees based on threadskv8.c. Also adds dual leaf/interior node page sizes for each btree. Note that this file is linux only.
 
 Compilation is achieved on linux or Windows by:
 
-gcc -D STANDALONE -O3 threadskv8.c -lpthread
+gcc -D STANDALONE -O3 threadskv10g.c -lpthread
 
 or
 
