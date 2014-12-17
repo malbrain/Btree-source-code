@@ -774,6 +774,7 @@ BtVal *val;
 	val->len = lvl ? BtId : 0;
 	memcpy (val->value, value, val->len);
 
+	page->fence = node->off;
 	page->min = node->off;
 	page->lvl = lvl;
 	page->cnt = 2;
@@ -795,6 +796,7 @@ BtMgr *bt_mgr (char *name, uint pagebits, uint leafxtra, uint nodemax)
 uint lvl, attr, last, slot, idx, blk;
 int flag, initit = 0;
 BtPageZero *pagezero;
+struct flock lock[1];
 BtLatchSet *latch;
 uid leaf_page;
 off64_t size;
@@ -820,6 +822,15 @@ BtMgr* mgr;
 	if( mgr->idx == -1 ) {
 		fprintf (stderr, "Unable to create/open btree file %s\n", name);
 		return free(mgr), NULL;
+	}
+
+	memset (lock, 0, sizeof(lock));
+	lock->l_len = sizeof(struct BtPage_);
+	lock->l_type = F_WRLCK;
+
+	if( fcntl (mgr->idx, F_SETLKW, lock) < 0 ) {
+		fprintf(stderr, "unable to lock record zero %s\n", name);
+		exit(1);
 	}
 #else
 	mgr = GlobalAlloc (GMEM_FIXED|GMEM_ZEROINIT, sizeof(BtMgr));
@@ -939,6 +950,13 @@ mgrlatch:
 #else
 	VirtualFree (pagezero, 0, MEM_RELEASE);
 #endif
+
+	lock->l_type = F_UNLCK;
+
+	if( fcntl (mgr->idx, F_SETLK, lock) < 0 ) {
+		fprintf (stderr, "Unable to unlock page zero\n");
+		exit(1);
+	}
 
 	//	map first segment
 
@@ -1750,7 +1768,7 @@ BtVal *val;
 	val->len = BtId;
 
 	nxt -= 2 + sizeof(BtKey);
-	page->fence = nxt;
+	root->page->fence = nxt;
 
 	slotptr(root->page, 2)->off = nxt;
 	ptr = (BtKey *)((unsigned char *)root->page + nxt);
@@ -3242,6 +3260,11 @@ FILE *in;
 
 	switch(ch | 0x20)
 	{
+	case 'a':
+	  bt_poolaudit(bt->mgr, "cache");
+	  bt_poolaudit(bt->main, "main");
+	  break;
+
 	case 'm':
 	  fprintf(stderr, "started flushing cache to main btree\n");
 
@@ -3534,7 +3557,7 @@ BtKey *ptr;
 		fprintf (stderr, "Usage: %s idx_file main_file cmds [pagebits leafbits poolsize txnsize mainbits mainleafbits mainpool maxleaves src_file1 src_file2 ... ]\n", argv[0]);
 		fprintf (stderr, "  where idx_file is the name of the cache btree file\n");
 		fprintf (stderr, "  where main_file is the name of the main btree file\n");
-		fprintf (stderr, "  cmds is a string of (r)ev scan/(w)rite/(s)can/(d)elete/(f)ind/(p)ennysort/(c)ount/(m)ainflush, with a one character command for each input src_file. A command can also be given with no input file\n");
+		fprintf (stderr, "  cmds is a string of (r)ev scan/(w)rite/(s)can/(d)elete/(f)ind/(p)ennysort/(c)ount/(m)ainflush/(a)udit, with a one character command for each input src_file. A command can also be given with no input file\n");
 		fprintf (stderr, "  pagebits is the page size in bits for the cache btree\n");
 		fprintf (stderr, "  leafbits is the number of xtra bits for a leaf page\n");
 		fprintf (stderr, "  poolsize is the number of latches in latch pool for the cache btree\n");
@@ -3604,7 +3627,7 @@ BtKey *ptr;
 
 	//	fire off threads
 
-	if( cnt > 0 )
+	if( cnt > 1 )
 	  for( idx = 0; idx < cnt; idx++ ) {
 		args[idx].infile = argv[idx + 12];
 		args[idx].type = argv[3];
@@ -3620,6 +3643,7 @@ BtKey *ptr;
 #endif
 	  }
 	else {
+		args[idx].infile = argv[12];
 		args[0].type = argv[3];
 		args[0].main = main;
 		args[0].mgr = mgr;
@@ -3631,19 +3655,17 @@ BtKey *ptr;
 	// 	wait for termination
 
 #ifdef unix
-	for( idx = 0; idx < cnt; idx++ )
+	if( cnt > 1 )
+	  for( idx = 0; idx < cnt; idx++ )
 		pthread_join (threads[idx], NULL);
 #else
-	WaitForMultipleObjects (cnt, threads, TRUE, INFINITE);
+	if( cnt > 1 )
+	  WaitForMultipleObjects (cnt, threads, TRUE, INFINITE);
 
-	for( idx = 0; idx < cnt; idx++ )
+	if( cnt > 1 )
+	  for( idx = 0; idx < cnt; idx++ )
 		CloseHandle(threads[idx]);
 #endif
-	bt_poolaudit(mgr, "cache");
-
-	if( main )
-		bt_poolaudit(main, "main");
-
 	fprintf(stderr, "cache %lld leaves %lld upper %d found\n", mgr->pagezero->leafpages, mgr->pagezero->upperpages, mgr->found);
 	if( main )
 		fprintf(stderr, "main %lld leaves %lld upper %d found\n", main->pagezero->leafpages, main->pagezero->upperpages, main->found);
