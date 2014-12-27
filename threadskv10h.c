@@ -3643,7 +3643,7 @@ BtKey *ptr;
 #endif
 	  }
 	else {
-		args[idx].infile = argv[12];
+		args[0].infile = argv[12];
 		args[0].type = argv[3];
 		args[0].main = main;
 		args[0].mgr = mgr;
