@@ -53,6 +53,7 @@ REDISTRIBUTION OF THIS SOFTWARE.
 #include <fcntl.h>
 #include <process.h>
 #include <intrin.h>
+#include <winnt.h>
 #endif
 
 #include <memory.h>
@@ -406,7 +407,7 @@ uid bt_newdup (BtDb *bt)
 #ifdef unix
 	return __sync_fetch_and_add (bt->mgr->pagezero->dups, 1) + 1;
 #else
-	return _InterlockedIncrement64(bt->mgr->pagezero->dups, 1);
+	return InterlockedIncrement64(bt->mgr->pagezero->dups);
 #endif
 }
 
@@ -454,7 +455,7 @@ ushort w, r, tix;
 #ifdef unix
 	tix = __sync_fetch_and_add (lock->ticket, 1);
 #else
-	tix = _InterlockedExchangeAdd16 (lock->ticket, 1);
+	tix = InterlockedExchangeAdd16 (lock->ticket, 1);
 #endif
 	// wait for our ticket to come up
 
@@ -469,7 +470,7 @@ ushort w, r, tix;
 #ifdef  unix
 	r = __sync_fetch_and_add (lock->rin, w);
 #else
-	r = _InterlockedExchangeAdd16 (lock->rin, w);
+	r = InterlockedExchangeAdd16 (lock->rin, w);
 #endif
 	while( r != *lock->rout )
 #ifdef unix
@@ -479,12 +480,12 @@ ushort w, r, tix;
 #endif
 }
 
-void WriteRelease (RWLock *lock)
+void RWriteRelease (RWLock *lock)
 {
 #ifdef unix
 	__sync_fetch_and_and (lock->rin, ~MASK);
 #else
-	_InterlockedAnd16 (lock->rin, ~MASK);
+	InterlockedAnd16 (lock->rin, ~MASK);
 #endif
 	lock->serving[0]++;
 }
@@ -495,7 +496,7 @@ ushort w;
 #ifdef unix
 	w = __sync_fetch_and_add (lock->rin, RINC) & MASK;
 #else
-	w = _InterlockedExchangeAdd16 (lock->rin, RINC) & MASK;
+	w = InterlockedExchangeAdd16 (lock->rin, RINC) & MASK;
 #endif
 	if( w )
 	  while( w == (*lock->rin & MASK) )
@@ -511,7 +512,7 @@ void ReadRelease (RWLock *lock)
 #ifdef unix
 	__sync_fetch_and_add (lock->rout, RINC);
 #else
-	_InterlockedExchangeAdd16 (lock->rout, RINC);
+	InterlockedExchangeAdd16 (lock->rout, RINC);
 #endif
 }
 
@@ -528,7 +529,7 @@ ushort prev;
 #ifdef unix
 	prev = __sync_fetch_and_add ((ushort *)latch, SHARE);
 #else
-	prev = _InterlockedExchangeAdd16((ushort *)latch, SHARE);
+	prev = InterlockedExchangeAdd16((ushort *)latch, SHARE);
 #endif
 	//  see if exclusive request is granted or pending
 
@@ -537,7 +538,7 @@ ushort prev;
 #ifdef unix
 	prev = __sync_fetch_and_add ((ushort *)latch, -SHARE);
 #else
-	prev = _InterlockedExchangeAdd16((ushort *)latch, -SHARE);
+	prev = InterlockedExchangeAdd16((ushort *)latch, -SHARE);
 #endif
 #ifdef  unix
   } while( sched_yield(), 1 );
@@ -556,7 +557,7 @@ ushort prev;
 #ifdef  unix
 	prev = __sync_fetch_and_or((ushort *)latch, PEND | XCL);
 #else
-	prev = _InterlockedOr16((ushort *)latch, PEND | XCL);
+	prev = InterlockedOr16((ushort *)latch, PEND | XCL);
 #endif
 	if( !(prev & XCL) )
 	  if( !(prev & ~BOTH) )
@@ -565,7 +566,7 @@ ushort prev;
 #ifdef unix
 		__sync_fetch_and_and ((ushort *)latch, ~XCL);
 #else
-		_InterlockedAnd16((ushort *)latch, ~XCL);
+		InterlockedAnd16((ushort *)latch, ~XCL);
 #endif
 #ifdef  unix
   } while( sched_yield(), 1 );
@@ -586,7 +587,7 @@ ushort prev;
 #ifdef  unix
 	prev = __sync_fetch_and_or((ushort *)latch, XCL);
 #else
-	prev = _InterlockedOr16((ushort *)latch, XCL);
+	prev = InterlockedOr16((ushort *)latch, XCL);
 #endif
 	//	take write access if all bits are clear
 
@@ -597,7 +598,7 @@ ushort prev;
 #ifdef unix
 		__sync_fetch_and_and ((ushort *)latch, ~XCL);
 #else
-		_InterlockedAnd16((ushort *)latch, ~XCL);
+		InterlockedAnd16((ushort *)latch, ~XCL);
 #endif
 	return 0;
 }
@@ -609,7 +610,7 @@ void bt_spinreleasewrite(BtSpinLatch *latch)
 #ifdef unix
 	__sync_fetch_and_and((ushort *)latch, ~BOTH);
 #else
-	_InterlockedAnd16((ushort *)latch, ~BOTH);
+	InterlockedAnd16((ushort *)latch, ~BOTH);
 #endif
 }
 
@@ -620,7 +621,7 @@ void bt_spinreleaseread(BtSpinLatch *latch)
 #ifdef unix
 	__sync_fetch_and_add((ushort *)latch, -SHARE);
 #else
-	_InterlockedExchangeAdd16((ushort *)latch, -SHARE);
+	InterlockedExchangeAdd16((ushort *)latch, -SHARE);
 #endif
 }
 
@@ -719,8 +720,8 @@ void bt_unpinlatch (BtLatchSet *latch)
 	__sync_fetch_and_add(&latch->pin, -1);
 #else
 	if( ~latch->pin & CLOCK_bit )
-		_InterlockedOr16 (&latch->pin, CLOCK_bit);
-	_InterlockedDecrement16 (&latch->pin);
+		InterlockedOr16 (&latch->pin, CLOCK_bit);
+	InterlockedDecrement16 (&latch->pin);
 #endif
 }
 
@@ -765,7 +766,7 @@ BtPage page;
 #ifdef unix
 	__sync_fetch_and_add(&latch->pin, 1);
 #else
-	_InterlockedIncrement16 (&latch->pin);
+	InterlockedIncrement16 (&latch->pin);
 #endif
 	bt_spinreleasewrite(bt->mgr->hashtable[hashidx].latch);
 	return latch;
@@ -775,7 +776,7 @@ BtPage page;
 #ifdef unix
 	slot = __sync_fetch_and_add (&bt->mgr->latchdeployed, 1) + 1;
 #else
-	slot = _InterlockedIncrement (&bt->mgr->latchdeployed);
+	slot = InterlockedIncrement (&bt->mgr->latchdeployed);
 #endif
 
 	if( slot < bt->mgr->latchtotal ) {
@@ -789,7 +790,7 @@ BtPage page;
 #ifdef unix
 	__sync_fetch_and_add (&bt->mgr->latchdeployed, -1);
 #else
-	_InterlockedDecrement (&bt->mgr->latchdeployed);
+	InterlockedDecrement (&bt->mgr->latchdeployed);
 #endif
   //  find and reuse previous entry on victim
 
@@ -797,7 +798,7 @@ BtPage page;
 #ifdef unix
 	slot = __sync_fetch_and_add(&bt->mgr->latchvictim, 1);
 #else
-	slot = _InterlockedIncrement (&bt->mgr->latchvictim) - 1;
+	slot = InterlockedIncrement (&bt->mgr->latchvictim) - 1;
 #endif
 	// try to get write lock on hash chain
 	//	skip entry if not obtained
@@ -827,7 +828,7 @@ BtPage page;
 #ifdef unix
 		__sync_fetch_and_and(&latch->pin, ~CLOCK_bit);
 #else
-		_InterlockedAnd16 (&latch->pin, ~CLOCK_bit);
+		InterlockedAnd16 (&latch->pin, ~CLOCK_bit);
 #endif
 	  }
 	  bt_spinreleasewrite (bt->mgr->hashtable[idx].latch);
@@ -1102,7 +1103,7 @@ mgrlatch:
 	}
 
 	flag = FILE_MAP_WRITE;
-	mgr->hashtable = MapViewOfFile(mgr->pool, flag, 0, 0, size);
+	mgr->hashtable = MapViewOfFile(mgr->hpool, flag, 0, 0, size);
 	if( !mgr->hashtable ) {
 		fprintf (stderr, "Unable to map buffer pool, error = %d\n", GetLastError());
 		return bt_mgrclose (mgr), NULL;
@@ -1134,7 +1135,7 @@ BtDb *bt = malloc (sizeof(*bt));
 #ifdef unix
 	bt->thread_no = __sync_fetch_and_add (mgr->thread_no, 1) + 1;
 #else
-	bt->thread_no = _InterlockedIncrement16(mgr->thread_no, 1);
+	bt->thread_no = InterlockedIncrement16(mgr->thread_no);
 #endif
 	return bt;
 }
@@ -1200,13 +1201,13 @@ void bt_unlockpage(BtDb *bt, BtLock mode, BtLatchSet *latch)
 		ReadRelease (latch->readwr);
 		break;
 	case BtLockWrite:
-		WriteRelease (latch->readwr);
+		RWriteRelease (latch->readwr);
 		break;
 	case BtLockAccess:
 		ReadRelease (latch->access);
 		break;
 	case BtLockDelete:
-		WriteRelease (latch->access);
+		RWriteRelease (latch->access);
 		break;
 	case BtLockParent:
 		WriteORelease (latch->parent);
@@ -1596,7 +1597,7 @@ BtKey *ptr;
 
 BTERR bt_deletekey (BtDb *bt, unsigned char *key, uint len, uint lvl)
 {
-uint slot, idx, found, fence;
+uint slot, idx, found, fence, ptrlen;
 BtPageSet set[1];
 BtKey *ptr;
 BtVal *val;
@@ -1611,11 +1612,16 @@ BtVal *val;
 	if( slotptr(set->page, slot)->type == Librarian )
 		ptr = keyptr(set->page, ++slot);
 
+    ptrlen = ptr->len;
+
+	if( slotptr(set->page, slot)->type == Duplicate )
+		ptrlen -= BtId;
+
 	fence = slot == set->page->cnt;
 
 	// if key is found delete it, otherwise ignore request
 
-	if( found = !keycmp (ptr, key, len) )
+	if( found = !memcmp (ptr->key, key, ptrlen > len ? len : ptrlen) )
 	  if( found = slotptr(set->page, slot)->dead == 0 ) {
 		val = valptr(set->page,slot);
 		slotptr(set->page, slot)->dead = 1;
