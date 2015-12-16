@@ -1563,7 +1563,7 @@ BtKey *ptr;
 
 BTERR bt_deletekey (BtMgr *mgr, unsigned char *key, uint len, uint lvl)
 {
-uint slot, idx, found, fence;
+uint slot, idx, found, fence, ptrlen;
 BtPageSet set[1];
 BtSlot *node;
 BtKey *ptr;
@@ -1583,10 +1583,14 @@ BtVal *val;
 	}
 
 	fence = slot == set->page->cnt;
+	ptrlen = ptr->len;
+
+	if( node->type == Duplicate ) {
+		ptrlen -= BtId;
 
 	// delete the key, ignore request if already dead
 
-	if( found = !keycmp (ptr, key, len) )
+	if( found = !memcmp (ptr->key, key, ptrlen > len ? len : ptrlen) )
 	  if( found = node->dead == 0 ) {
 		val = valptr(set->page,slot);
  		set->page->garbage += ptr->len + val->len + sizeof(BtKey) + sizeof(BtVal);
