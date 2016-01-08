@@ -1585,7 +1585,7 @@ BtVal *val;
 	fence = slot == set->page->cnt;
 	ptrlen = ptr->len;
 
-	if( node->type == Duplicate ) {
+	if( node->type == Duplicate )
 		ptrlen -= BtId;
 
 	// delete the key, ignore request if already dead
