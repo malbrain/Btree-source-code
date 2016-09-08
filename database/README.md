@@ -25,7 +25,7 @@ Sample output from indexing/persisting 10000000 complete pennysort records (cmd 
 
     [root@test7x64 xlink]# cc -O3 -g -o dbtest database/*.c -lpthread
     [root@test7x64 xlink]# ./dbtest tstdb w 14 0 1 penny0
-    started indexing for /home/xlink14/xlink/penny0
+    started indexing for penny0
      real 0m42.706s
      user 0m40.067s
      sys  0m2.673s
@@ -36,7 +36,7 @@ Sample output from indexing/persisting 10000000 complete pennysort records (cmd 
 Sample output from storing/indexing/persisting 10000000 pennysort records (1GB):
 
     [root@test7x64 xlink]# ./dbtest tstdb p 13 0 1 penny0
-    started pennysort insert for /home/xlink14/xlink/penny0
+    started pennysort insert for penny0
      real 0m38.211s
      user 0m36.218s
      sys  0m2.023s
@@ -44,5 +44,20 @@ Sample output from storing/indexing/persisting 10000000 pennysort records (1GB):
     -rw-r--r-- 1 root root 1073610752 Sep  7 22:37 tstdb
     -rw-r--r-- 1 root root  536477696 Sep  7 22:37 tstdb.index
 
-Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu
+Sample output from indexing/persisting 10000000 complete pennysort records (cmd 'w') InMemory:
 
+    [root@test7x64 xlink]# ./dbtest tstdb w 14 0 0 penny0
+    started indexing for penny0
+     real 0m40.065s
+     user 0m38.730s
+     sys  0m1.368s
+
+Sample output from storing/indexing/persisting 10000000 pennysort records (1GB) inMemory:
+
+    [root@test7x64 xlink]# ./dbtest tstdb p 14 0 0 penny0
+    started pennysort insert for penny0
+     real 0m35.829s
+     user 0m34.863s
+     sys  0m0.987s
+
+Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu

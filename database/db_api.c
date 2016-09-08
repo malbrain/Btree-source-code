@@ -9,7 +9,7 @@ void initialize() {
 }
 
 void *createObjStore(char *path, bool onDisk) {
-Handle *hndl = createMap(path, 0, sizeof(ObjId), 0, true);
+Handle *hndl = createMap(path, 0, sizeof(ObjId), 0, onDisk);
 
 	if (hndl->map->created)
 		hndl->map->arena->type[0] = ObjStoreType;
@@ -26,7 +26,7 @@ Handle *hndl;
 	path[len++] = '.';
 	strcpy (path + len, idxName);
 
-	hndl = createMap(path, sizeof(BtreeIndex), sizeof(ObjId), 0, true);
+	hndl = createMap(path, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
 
 	if (hndl->map->created)
 		btreeInit(hndl);
