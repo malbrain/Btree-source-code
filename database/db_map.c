@@ -11,19 +11,23 @@
 #include <sys/mman.h>
 #include <errno.h>
 #include <sched.h>
+
+#define pause() asm volatile("pause\n": : : "memory")
 #endif
 
 #include "db.h"
+#include "db_object.h"
+#include "db_arena.h"
+#include "db_map.h"
 
 #ifdef _WIN32
-HANDLE openPath(char *name, uint32_t segNo) {
-int off = strlen(name);
-char path[MAX_path];
+HANDLE openPath(char *path, uint32_t segNo) {
+int off = strlen(path);
+int init = off;
 HANDLE hndl;
 
-	memcpy (path, name, off);
 	strcpy (path + off, "._seg000");
-	off += 9;
+	off += 8;
 
 	while (segNo) {
 		path[--off] += segNo % 10;
@@ -37,13 +41,14 @@ HANDLE hndl;
 		return NULL;
 	}
 
+	path[init] = 0;
 	return hndl;
 }
 #else
 int openPath(char *path, uint32_t segNo) {
 int hndl, flags;
 
-	int flags = O_RDWR | O_CREAT;
+	flags = O_RDWR | O_CREAT;
 
 	hndl = open (path, flags, 0666);
 
@@ -59,9 +64,18 @@ int hndl, flags;
 void waitNonZero(volatile char *zero) {
 	while (!*zero)
 #ifndef _WIN32
-			relax();
+			pause();
 #else
-			SwitchToThread();
+			Yield();
+#endif
+}
+
+void waitNonZero64(volatile uint64_t *zero) {
+	while (!*zero)
+#ifndef _WIN32
+			pause();
+#else
+			Yield();
 #endif
 }
 
@@ -73,9 +87,9 @@ void lockLatch(volatile char* latch) {
 #endif
 		do
 #ifndef _WIN32
-			relax();
+			pause();
 #else
-			SwitchToThread();
+			Yield();
 #endif
 		while (*latch & MUTEX_BIT);
 	}
@@ -85,7 +99,7 @@ void unlockLatch(volatile char* latch) {
 #ifndef _WIN32
 	__sync_fetch_and_and(latch, ~MUTEX_BIT);
 #else
-	InterlockedAnd8( latch, ~MUTEX_BIT);
+	_InterlockedAnd8( latch, ~MUTEX_BIT);
 #endif
 }
 
@@ -93,7 +107,7 @@ int64_t atomicAdd64(volatile int64_t *value, int64_t amt) {
 #ifndef _WIN32
 	return __sync_fetch_and_add(value, amt) + amt;
 #else
-	return InterlockedAdd64( value, amt);
+	return _InterlockedAdd64( value, amt);
 #endif
 }
 
@@ -101,7 +115,7 @@ int32_t atomicAdd32(volatile int32_t *value, int32_t amt) {
 #ifndef _WIN32
 	return __sync_fetch_and_add(value, amt) + amt;
 #else
-	return InterlockedAdd( (volatile long *)value, amt);
+	return _InterlockedAdd( (volatile long *)value, amt);
 #endif
 }
 
@@ -109,7 +123,7 @@ int64_t atomicOr64(volatile int64_t *value, int64_t amt) {
 #ifndef _WIN32
 	return __sync_fetch_and_or (value, amt);
 #else
-	return InterlockedOr64( value, amt);
+	return _InterlockedOr64( value, amt);
 #endif
 }
 
@@ -117,7 +131,7 @@ int32_t atomicOr32(volatile int32_t *value, int32_t amt) {
 #ifndef _WIN32
 	return __sync_fetch_and_or(value, amt);
 #else
-	return InterlockedOr( (volatile long *)value, amt);
+	return _InterlockedOr( (volatile long *)value, amt);
 #endif
 }
 
@@ -191,7 +205,7 @@ int flags = MAP_SHARED;
 	mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags, map->hndl[0], offset);
 
 	if (mem == MAP_FAILED) {
-		fprintf (stderr, "Unable to mmap %s, offset = %llx, error = %d", map->path.str, offset, errno);
+		fprintf (stderr, "Unable to mmap %s, offset = %llx, error = %d", map->path, offset, errno);
 		return NULL;
 	}
 #else
@@ -245,7 +259,7 @@ void kill_slot(volatile char *latch) {
 #ifndef _WIN32
 	__sync_fetch_and_or(latch, DEAD_BIT);
 #else
-	InterlockedOr8(latch, DEAD_BIT);
+	_InterlockedOr8(latch, DEAD_BIT);
 #endif
 }
 

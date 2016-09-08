@@ -5,8 +5,19 @@
 #endif
 
 #include "db.h"
+#include "db_map.h"
 #include "db_arena.h"
 #include "db_malloc.h"
+
+#define MAX_blk 24
+
+//
+// Raw object wrapper
+//
+
+typedef struct RawObj {
+	DbAddr addr[1];
+} rawobj_t;
 
 DbArena memArena[1];
 DbMap memMap[1];
@@ -21,7 +32,7 @@ void memInit() {
 }
 
 void db_free (void *obj) {
-	rawobj_t *raw = obj;
+rawobj_t *raw = obj;
 
 	if (raw[-1].addr->dead) {
 		fprintf(stderr, "Duplicate db_free\n");
@@ -35,8 +46,8 @@ void db_free (void *obj) {
 //	raw memory allocator
 
 uint64_t db_rawalloc(uint32_t amt, bool zeroit) {
-	uint32_t bits = 3;
-	uint64_t addr;
+uint32_t bits = 3;
+uint64_t addr;
 
 #ifdef _WIN32
 	_BitScanReverse((unsigned long *)&bits, amt - 1);
@@ -44,7 +55,7 @@ uint64_t db_rawalloc(uint32_t amt, bool zeroit) {
 #else
 	bits = 32 - (__builtin_clz (amt - 1));
 #endif
-	if ((addr = allocObj(memMap, &memArena->freeBlk[bits], bits, 1UL << bits, zeroit)))
+	if ((addr = allocObj(memMap, &memArena->freeBlk[bits], NULL, bits, 1UL << bits, zeroit)))
 		return addr;
 
 	fprintf (stderr, "out of memory!\n");
@@ -52,45 +63,43 @@ uint64_t db_rawalloc(uint32_t amt, bool zeroit) {
 }
 
 void *db_rawaddr(uint64_t rawAddr) {
-	DbAddr addr;
+DbAddr addr;
 
 	addr.bits = rawAddr;
 	return getObj(memMap, addr);
 }
 
 void db_rawfree(uint64_t rawAddr) {
-	DbAddr addr;
+DbAddr addr;
 
 	addr.bits = rawAddr;
 	addSlotToFrame(memMap, &memArena->freeBlk[addr.type], rawAddr);
 }
 
-//	allocate reference counted object
+//	allocate object
 
-void *db_alloc(uint32_t len, bool zeroit) {
-	rawobj_t *mem;
-	DbAddr addr;
+void *db_malloc(uint32_t len, bool zeroit) {
+rawobj_t *mem;
+DbAddr addr;
 
 	addr.bits = db_rawalloc(len + sizeof(rawobj_t), zeroit);
 	mem = getObj(memMap, addr);
 	mem->addr->bits = addr.bits;
-	mem->weakCnt[0] = 0;
-	mem->refCnt[0] = 0;
 	return mem + 1;
 }
 
 uint32_t db_size (void *obj) {
-	rawobj_t *raw = obj;
+rawobj_t *raw = obj;
 
 	return (1 << raw[-1].addr->type) - sizeof(rawobj_t);
 }
 
 void *db_realloc(void *old, uint32_t size, bool zeroit) {
-	uint32_t amt = size + sizeof(rawobj_t), bits;
-	rawobj_t *raw = old, *mem;
-	uint32_t oldSize, newSize;
-	DbAddr addr[1];
-	int oldBits;
+uint32_t amt = size + sizeof(rawobj_t), bits;
+rawobj_t *raw = old, *mem;
+uint32_t oldSize, newSize;
+DbAddr addr[1];
+int oldBits;
 
 #ifdef _WIN32
 	_BitScanReverse((unsigned long *)&bits, amt - 1);
@@ -112,7 +121,7 @@ void *db_realloc(void *old, uint32_t size, bool zeroit) {
 	if (oldBits == bits)
 		return old;
 
-	if ((addr->bits = allocObj(memMap, &memArena->freeBlk[bits], bits, newSize, zeroit)))
+	if ((addr->bits = allocObj(memMap, &memArena->freeBlk[bits], NULL, bits, newSize, zeroit)))
 		mem = getObj(memMap, *addr);
 	else {
 		fprintf (stderr, "out of memory!\n");

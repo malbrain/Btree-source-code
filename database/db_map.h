@@ -3,13 +3,37 @@
 #define MUTEX_BIT  0x1
 #define DEAD_BIT   0x2
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#else
-#define relax() asm volatile("pause\n" : : : "memory")
-#endif
+#include "db_error.h"
+#include "db_malloc.h"
+#include "db_object.h"
+#include "db_lock.h"
 
+/**
+ *	map allocations
+ */
+
+uint64_t allocMap(DbMap *map, uint32_t size);
+uint64_t allocObj(DbMap *map, DbAddr *free, DbAddr *wait, int type, uint32_t size, bool zeroit);
+void *fetchObjSlot (DbMap *map, ObjId objId);
+void *getObj(DbMap *map, DbAddr addr); 
+void closeMap(DbMap *map);
+
+bool newSeg(DbMap *map, uint32_t minSize);
+void mapSegs(DbMap *map);
+
+uint64_t allocNode(DbMap *map, FreeList *list, int type, uint32_t size, bool zeroit);
+uint64_t getNodeFromFrame (DbMap *map, DbAddr *queue);
+bool getNodeWait (DbMap *map, DbAddr *queue, DbAddr *tail);
+bool initObjFrame (DbMap *map, DbAddr *queue, uint32_t type, uint32_t size);
+bool addSlotToFrame(DbMap *map, DbAddr *head, uint64_t addr);
+
+void *fetchIdSlot (DbMap *map, ObjId objId);
+uint64_t allocObjId(DbMap *map, DbAddr *free, DbAddr *tail);
+uint64_t getFreeFrame(DbMap *map);
+uint64_t allocFrame(DbMap *map);
+
+// void *cursorNext(DbCursor *cursor, DbMap *index);
+// void *cursorPrev(DbCursor *cursor, DbMap *index);
 /**
  * spin latches
  */
@@ -17,6 +41,7 @@
 void lockLatch(volatile char* latch);
 void unlockLatch(volatile char* latch);
 void waitNonZero(volatile char *zero);
+void waitNonZero64(volatile uint64_t *zero);
 void art_yield();
 
 /**
@@ -44,8 +69,8 @@ bool mapSeg(DbMap *map, uint32_t segNo);
  */
 
 #ifdef _WIN32
-void lockArena(HANDLE hndl, char *fName);
-void unlockArena(HANDLE hndl, char *fName);
+void lockArena(void *hndl, char *fName);
+void unlockArena(void *hndl, char *fName);
 #else
 void lockArena(int hndl, char *fName);
 void unlockArena(int hndl, char *fName);

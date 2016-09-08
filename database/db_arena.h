@@ -11,43 +11,43 @@
 #define MAX_path  4096
 #define MAX_blk		24	// max arena blk size in bits
 
-#define HNDL_cnt	64	// number of arena Handles in a segment
-#define HNDL_max	64	// max number of Handle segments
+//	types of arenas
 
-//	arena handle array
-
-typedef struct {
-	uint64_t inUse;				// handle in use bit array
-	uint64_t docTs[HNDL_cnt];	// document timestamp
-} HandleFrame;
+enum MapType {
+	NotSetYet = 0,
+	ObjStoreType,
+	BtreeIndexType
+};
 
 //  on disk arena segment
 
 typedef struct {
 	uint64_t off;		// file offset of the segment
 	uint64_t size;		// size of the segment
-	DocId nextDoc;		// highest document ID in use
+	ObjId nextObj;		// highest object ID in use
 } DbSeg;
 
 //  on disk/mmap arena seg zero
 
-typedef struct {
-	DbSeg segs[MAX_segs]; 	// segment meta-data
-	DbAddr hndls[HNDL_max]; // segment handle frames
-	DbAddr freeBlk[MAX_blk];// Arena free block frames
-	DbAddr freeFrame[1];	// next free frame address
-	DbAddr nextObject;		// next Object address
-	uint64_t docTs;			// Incremented on delete doc
-	uint32_t idSize;		// size of id array element
-	uint8_t currSeg;		// index of highest segment
-	uint8_t hndlSeg;		// index of highest handle seg
-	char mutex;				// arena allocation lock/drop flag
-	char type;				// arena type
-} DbArena;
+struct DbArena_ {
+	DbSeg segs[MAX_segs]; 		// segment meta-data
+	uint64_t lowTs, delTs;		// low hndl ts, Incr on delete
+	DbAddr freeBlk[MAX_blk];	// list of free frames in frames
+	DbAddr handleArray[1];		// handle array
+	DbAddr freeFrame[1];		// list of free frames in frames
+	DbAddr nextObject;			// next Object address
+	uint64_t objCount;			// overall number of objects
+	uint64_t objSpace;			// overall size of objects
+	uint32_t objSize;			// size of object array element
+	uint8_t currSeg;			// index of highest segment
+	char newHndl[1];			// handle allocation lock
+	char mutex[1];				// arena allocation lock/drop flag
+	char type[1];				// arena type
+};
 
 //	in memory arena map
 
-typedef struct {
+struct DbMap_ {
 	char *base[MAX_segs];	// pointers to mapped segment memory
 #ifndef _WIN32
 	int hndl[1];			// OS file handle
@@ -56,15 +56,15 @@ typedef struct {
 	HANDLE maphndl[MAX_segs];
 #endif
 	DbArena *arena;			// ptr to mapped seg zero
+	char path[MAX_path];	// path to file
 	uint32_t maxSeg;		// maximum segment array index in use
-	char *path;				// path to file name
+	char mutex[1];			// arena lock
 	char onDisk;			// on disk bool flag
-	char mutex;				// arena lock
-} DbMap;
+	char created;			// set if map created
+};
 
-DbMap *createMap(char *path, uint32_t baseSize, uint32_t idSize, uint64_t initSize, bool onDisk);
+void *createMap(char *path, uint32_t baseSize, uint32_t idSize, uint64_t initSize, bool onDisk);
 void returnFreeFrame(DbMap *map, DbAddr slot);
-uint64_t allocBlk (DbMap *map, uint32_t size);
 #ifdef _WIN32
 HANDLE openPath(char *name, uint32_t segNo);
 #else
