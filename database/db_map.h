@@ -16,10 +16,6 @@ uint64_t allocMap(DbMap *map, uint32_t size);
 uint64_t allocObj(DbMap *map, DbAddr *free, DbAddr *wait, int type, uint32_t size, bool zeroit);
 void *fetchObjSlot (DbMap *map, ObjId objId);
 void *getObj(DbMap *map, DbAddr addr); 
-void closeMap(DbMap *map);
-
-bool newSeg(DbMap *map, uint32_t minSize);
-void mapSegs(DbMap *map);
 
 uint64_t allocNode(DbMap *map, FreeList *list, int type, uint32_t size, bool zeroit);
 uint64_t getNodeFromFrame (DbMap *map, DbAddr *queue);
@@ -34,6 +30,7 @@ uint64_t allocFrame(DbMap *map);
 
 // void *cursorNext(DbCursor *cursor, DbMap *index);
 // void *cursorPrev(DbCursor *cursor, DbMap *index);
+
 /**
  * spin latches
  */
@@ -55,14 +52,6 @@ int32_t atomicAdd32(volatile int32_t *value, int32_t amt);
 int64_t atomicOr64(volatile int64_t *value, int64_t amt);
 int32_t atomicOr32(volatile int32_t *value, int32_t amt);
 uint64_t compareAndSwap(uint64_t* target, uint64_t compare_val, uint64_t swap_val);
-
-/**
- *  memory mapping
- */
-
-void* mapMemory(DbMap *map, uint64_t offset, uint64_t size, uint32_t segNo);
-void unmapSeg(DbMap *map, uint32_t segNo);
-bool mapSeg(DbMap *map, uint32_t segNo);
 
 /**
  *	file system lock

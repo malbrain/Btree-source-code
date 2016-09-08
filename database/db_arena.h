@@ -33,7 +33,7 @@ struct DbArena_ {
 	DbSeg segs[MAX_segs]; 		// segment meta-data
 	uint64_t lowTs, delTs;		// low hndl ts, Incr on delete
 	DbAddr freeBlk[MAX_blk];	// list of free frames in frames
-	DbAddr handleArray[1];		// handle array
+	DbAddr handleArray[1];		// permanent handle array
 	DbAddr freeFrame[1];		// list of free frames in frames
 	DbAddr nextObject;			// next Object address
 	uint64_t objCount;			// overall number of objects
@@ -56,15 +56,30 @@ struct DbMap_ {
 	HANDLE maphndl[MAX_segs];
 #endif
 	DbArena *arena;			// ptr to mapped seg zero
+	DbAddr hndlArray[1];	// local handle array
 	char path[MAX_path];	// path to file
-	uint32_t maxSeg;		// maximum segment array index in use
-	char mutex[1];			// arena lock
+	uint16_t hndlCnt[1];	// number of handles outstanding
+	uint16_t maxSeg;		// maximum segment array index in use
+	char mapMutex[1];		// segment mapping mutex
 	char onDisk;			// on disk bool flag
 	char created;			// set if map created
 };
 
 void *createMap(char *path, uint32_t baseSize, uint32_t idSize, uint64_t initSize, bool onDisk);
 void returnFreeFrame(DbMap *map, DbAddr slot);
+
+/**
+ *  memory mapping
+ */
+
+void* mapMemory(DbMap *map, uint64_t offset, uint64_t size, uint32_t segNo);
+void unmapSeg(DbMap *map, uint32_t segNo);
+bool mapSeg(DbMap *map, uint32_t segNo);
+void closeMap(DbMap *map);
+
+bool newSeg(DbMap *map, uint32_t minSize);
+void mapSegs(DbMap *map);
+
 #ifdef _WIN32
 HANDLE openPath(char *name, uint32_t segNo);
 #else

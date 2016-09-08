@@ -87,7 +87,6 @@ DbMap *map;
 	} else
 #ifdef _WIN32
 		fileHndl = INVALID_HANDLE_VALUE;
-		map->hndl[0] = fileHndl;
 #else
 		fileHndl = -1;
 #endif
@@ -273,7 +272,7 @@ DbAddr slot;
 }
 
 void mapAll (DbMap *map) {
-	lockLatch(map->mutex);
+	lockLatch(map->mapMutex);
 
 	while (map->maxSeg < map->arena->currSeg)
 		if (mapSeg (map, map->maxSeg + 1))
@@ -281,7 +280,7 @@ void mapAll (DbMap *map) {
 		else
 			fprintf(stderr, "Unable to map segment %d on map %s\n", map->maxSeg + 1, map->path), exit(1);
 
-	unlockLatch(map->mutex);
+	unlockLatch(map->mapMutex);
 }
 
 void* getObj(DbMap *map, DbAddr slot) {
@@ -298,9 +297,13 @@ void* getObj(DbMap *map, DbAddr slot) {
 	return map->base[slot.segment] + slot.offset * 8ULL;
 }
 
+//	close the arena
+
 void closeMap(DbMap *map) {
 	while (map->maxSeg)
 		unmapSeg(map, map->maxSeg--);
+
+	map->arena = NULL;
 }
 
 //  allocate raw space in the current segment

@@ -3,22 +3,27 @@
 #include "db_arena.h"
 #include "db_map.h"
 
+extern DbMap memMap[1];
+
 Handle *makeHandle(DbMap *map) {
-HandleArray *element;
+uint32_t localIdx;
 Handle *hndl;
 
-	hndl = db_malloc(sizeof(Handle), true);
-	hndl->idx = arrayAlloc(map, map->arena->handleArray, sizeof(HandleArray));
+	localIdx = arrayAlloc(memMap, map->hndlArray, sizeof(Handle));
+	hndl = arrayElement(memMap, map->hndlArray, localIdx, sizeof(Handle));
+
+	hndl->arenaIdx = arrayAlloc(map, map->arena->handleArray, sizeof(HandleArray));
+	hndl->localIdx = localIdx;
 	hndl->map = map;
 
-	element = arrayElement(map, map->arena->handleArray, hndl->idx, sizeof(HandleArray));
+	hndl->array = arrayElement(map, map->arena->handleArray, hndl->arenaIdx, sizeof(HandleArray));
 
 	// allocate freeList array
 
-	if (!element->freeList.bits)
-		element->freeList.bits = allocObj(map, map->arena->freeBlk, NULL, -1, sizeof(FreeList) * MaxObjType, true);
+	if (!hndl->array->freeList.bits)
+		hndl->array->freeList.bits = allocObj(map, map->arena->freeBlk, NULL, -1, sizeof(FreeList) * MaxObjType, true);
 
-	hndl->freeList = getObj(map, element->freeList);
+	hndl->freeList = getObj(map, hndl->array->freeList);
 	return hndl;
 }
 
@@ -28,6 +33,8 @@ uint8_t *base = getObj(map, *array);
 	base += array->nslot * sizeof(uint64_t);
 	return (void *)(base + size * idx);
 }
+
+//	allocate an array element
 
 uint32_t arrayAlloc(DbMap *map, DbAddr *array, size_t size) {
 uint64_t *inUse, *newArray;
@@ -62,6 +69,8 @@ int idx, max;
 	if (array->nslot == 255)
 		fprintf(stderr, "Array overflow\n"), exit(1);
 
+	// calculate number of slots
+
 	if ((max = array->nslot))
 		max += max / 2;
 	else
@@ -70,7 +79,7 @@ int idx, max;
 	if (max > 255)
 		max = 255;
 
-	next->bits = allocObj(map, map->arena->freeBlk, NULL, -1, size * (sizeof(uint64_t) + size) * max, true);
+	next->bits = allocObj(map, map->arena->freeBlk, NULL, -1, max * sizeof(uint64_t) + (max * 64) * size, true);
 
 	next->nslot = max;
 
@@ -87,54 +96,133 @@ int idx, max;
 
 	// release old array
 
-	addSlotToFrame(map, &map->arena->freeBlk[array->type], array->bits);
+	if (array->addr)
+		addSlotToFrame(map, &map->arena->freeBlk[array->type], array->bits);
 
 	// point to new array, release lock in the process
 
 	array->bits = next->bits;
-
 	return idx;
 }
 
-void closeHandle(Handle  *hndl) {
+//  check if all handles are dead/closed
+
+void checkHandles(Handle *hndl) {
+DbAddr *array = hndl->map->hndlArray;
+uint64_t *inUse = getObj(hndl->map, *array);
+Handle *hndlArray;
+int idx, jdx;
+
+	hndlArray = (Handle *)(inUse + array->nslot);
+
+	for (idx = 0; idx < array->nslot; hndlArray += 64, idx++)
+	  for (jdx = 0; jdx < 64; jdx++)
+		if (inUse[idx] & 1ULL << jdx)
+		  if (hndlArray[jdx].status[0] != HANDLE_dead)
+			return;
+
+	lockLatch(array->latch);
+
+	if (hndl->map->arena)
+		closeMap(hndl->map);
+
+	unlockLatch(array->latch);
+}
+
+//	delete handle
+
+void deleteHandle(Handle  *hndl) {
 DbAddr *array = hndl->map->arena->handleArray;
 uint64_t *inUse;
 
+	atomicOr32(hndl->status, HANDLE_dead);
+
+	// return permanent handle
+ 
 	lockLatch(array->latch);
 	inUse = getObj(hndl->map, *array);
-	inUse[hndl->idx / 64] &= ~(1ULL << (hndl->idx % 64));
+
+	// clear permanent in-use bit
+
+	inUse[hndl->arenaIdx / 64] &= ~(1ULL << (hndl->arenaIdx % 64));
 	unlockLatch(array->latch);
 
-	db_free(hndl);
+	// return local handle
+
+	array = memMap->arena->handleArray;
+
+	lockLatch(array->latch);
+	inUse = getObj(memMap, *array);
+
+	// clear local in-use bit
+
+	inUse[hndl->localIdx / 64] &= ~(1ULL << (hndl->localIdx % 64));
+	unlockLatch(array->latch);
 }
 
-//	handle being used in API call
-//	return false if map being dropped
+//	API entry to close handle
+
+void closeHandle(Handle  *hndl) {
+
+	if (bindHandle(hndl)) {
+		deleteHandle(hndl);
+		releaseHandle(hndl);
+	}
+}
+
+//	bind handle for use in API call
+//	return false if arena dropped
 
 bool bindHandle(Handle *hndl) {
 DbAddr *array = hndl->map->arena->handleArray;
-HandleArray *element;
+uint32_t actve;
+bool first;
 
-	element = arrayElement(hndl->map, array, hndl->idx, sizeof(HandleArray));
+	if (hndl->status[0] & HANDLE_dead)
+		return false;
 
-	if (atomicAdd32(hndl->actve, 1) - 1)
-		waitNonZero64(&element->objTs);
+	//	increment count of active api entries
+
+	actve = atomicAdd32(hndl->status, HANDLE_incr);
+
+	if (actve & HANDLE_dead)
+		return releaseHandle(hndl), false;
+
+	//	is there a DROP request active?
+
+	if (hndl->map->arena->mutex[0] & DEAD_BIT) {
+		atomicOr32(hndl->status, HANDLE_dead);
+		releaseHandle(hndl);
+		return false;
+	}
+
+	//  is this the first bind?
+
+	if ((actve >> 1) > 1)
+		waitNonZero64(&hndl->array->objTs);
 	else
-		element->objTs = hndl->map->arena->delTs;
+		hndl->array->objTs = hndl->map->arena->delTs;
 
-	return ~hndl->map->mutex[0] & DEAD_BIT;
+	return true;
 }
 
+//	release handle binding
+
 void releaseHandle(Handle *hndl) {
-DbAddr *array = hndl->map->arena->handleArray;
-HandleArray *element;
+uint32_t actve;
 
-	if (atomicAdd32(hndl->actve, -1))
+	actve = atomicAdd32(hndl->status, -HANDLE_incr);
+
+	//	decrement active arena pointer count
+	//	if we are the last active api entry
+
+	if (actve == HANDLE_dead) {
+		checkHandles(hndl);
 		return;
+	}
 
-	element = arrayElement(hndl->map, array, hndl->idx, sizeof(HandleArray));
-	waitNonZero64(&element->objTs);
-	element->objTs = 0;
+	waitNonZero64(&hndl->array->objTs);
+	hndl->array->objTs = 0;
 }
 
 //	get 64 bit suffix value

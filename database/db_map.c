@@ -236,6 +236,7 @@ int flags = MAP_SHARED;
 void unmapSeg (DbMap *map, uint32_t segNo) {
 #ifndef _WIN32
 	munmap(map->base[segNo], map->arena->segs[segNo].size);
+	close (*map->hndl);
 #else
 	if (!map->onDisk) {
 		VirtualFree(map->base[segNo], 0, MEM_RELEASE);

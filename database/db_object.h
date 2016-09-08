@@ -20,12 +20,17 @@ typedef struct {
 	DbAddr freeList;	// node free list by type
 } HandleArray;
 
-//	Handle returned for arena
+//	Local Handle for an arena
+
+#define HANDLE_dead	0x1
+#define HANDLE_incr	0x2
 
 typedef struct {
-	FreeList *freeList;	// pointer to free list
-	uint32_t actve[1];	// active entry count
-	uint32_t idx;		// handle table entry index
+	FreeList *freeList;	// pointer to object free lists
+	HandleArray *array;	// pointer to arena handle entry
+	uint32_t status[1];	// active entry count/dead status
+	uint16_t arenaIdx;	// arena handle table entry index
+	uint16_t localIdx;	// local handle entry index
 	DbMap *map;			// pointer to map
 } Handle;
 
