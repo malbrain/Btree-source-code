@@ -30,6 +30,9 @@ Sample output from indexing/persisting 10000000 complete pennysort records (cmd 
      user 0m40.067s
      sys  0m2.673s
 
+    -rw-r--r-- 1 root root     131072 Sep  7 17:26 tstdb
+    -rw-r--r-- 1 root root 2147090432 Sep  7 17:27 tstdb.index
+
 Sample output from storing/indexing/persisting 10000000 pennysort records (1GB):
 
     [root@test7x64 xlink]# ./dbtest tstdb p 13 0 1 penny0
@@ -37,6 +40,9 @@ Sample output from storing/indexing/persisting 10000000 pennysort records (1GB):
      real 0m38.211s
      user 0m36.218s
      sys  0m2.023s
+
+    -rw-r--r-- 1 root root 1073610752 Sep  7 22:37 tstdb
+    -rw-r--r-- 1 root root  536477696 Sep  7 22:37 tstdb.index
 
 Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu
 
