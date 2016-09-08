@@ -44,17 +44,15 @@ void *cloneHandle(void *hndl) {
 
 int addObject(void *arg, void *obj, uint32_t size, uint64_t *result) {
 Handle *hndl = (Handle *)arg;
-HandleArray *element;
 Status stat = OK;
 DbAddr addr;
 void *dest;
 
 	if (bindHandle(hndl))
-		element = arrayElement(hndl->map, hndl->map->arena->handleArray, hndl->idx, sizeof(HandleArray));
+		*result = allocNode(hndl->map, hndl->freeList, -1, size, false); 
 	else
 		return ERROR_arenadropped;
 
-	*result = allocNode(hndl->map, getObj(hndl->map, element->freeList), -1, size, false); 
 	addr.bits = *result;
 
 	dest = getObj(hndl->map, addr);
@@ -63,7 +61,16 @@ void *dest;
 }
 
 int insertKey(void *index, uint8_t *key, uint32_t len) {
-	return btreeInsertKey((Handle *)index, key, len, 0, Btree_indexed);
+Handle *hndl = (Handle *)index;
+int stat;
+
+	if (bindHandle(hndl))
+		stat = btreeInsertKey(hndl, key, len, 0, Btree_indexed);
+	else
+		return ERROR_arenadropped;
+
+	releaseHandle(hndl);
+	return stat;
 }
 
 int addObjId(uint8_t *key, uint64_t addr) {

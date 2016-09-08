@@ -149,6 +149,7 @@ DbMap *map;
 	map->arena->nextObject.offset = segOffset >> 3;
 	map->arena->segs->size = initSize;
 	map->arena->objSize = objSize;
+	map->arena->delTs = 1;
 	map->created = true;
 
 	if (onDisk)

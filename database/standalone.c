@@ -83,7 +83,7 @@ typedef struct {
 #ifdef unix
 void *index_file (void *arg)
 #else
-void __cdecl index_file (void *arg)
+unsigned __stdcall index_file (void *arg)
 #endif
 {
 int line = 0, found = 0, cnt = 0, idx;
@@ -128,7 +128,7 @@ FILE *in;
 #endif
 			  line++;
 
-			  if ((stat = addObject (objStore, key, len, &objAddr)))
+			  if ((stat = addObject (objStore, key + 10, len - 10, &objAddr)))
 				  fprintf(stderr, "Add Error %d Line: %d\n", stat, line), exit(0);
 			  len = 10;
 			  len += addObjId(key + len, objAddr);
@@ -270,6 +270,8 @@ FILE *in;
 
 #ifdef unix
 	return NULL;
+#else
+	return 0;
 #endif
 }
 
@@ -341,7 +343,7 @@ void *index;
 		if( err = pthread_create (threads + idx, NULL, index_file, args + idx) )
 		  fprintf(stderr, "Error creating thread %d\n", err);
 #else
-		while ( (int64_t)(threads[idx] = (HANDLE)_beginthread(index_file, 65536, args + idx)) < 0LL)
+		while ( (int64_t)(threads[idx] = (HANDLE)_beginthreadex(NULL, 65536, index_file, args + idx, 0, NULL)) < 0LL)
 		  fprintf(stderr, "Error creating thread errno = %d\n", errno);
 
 #endif
