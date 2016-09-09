@@ -60,4 +60,15 @@ Sample output from storing/indexing/persisting 10000000 pennysort records (1GB) 
      user 0m34.863s
      sys  0m0.987s
 
+Sample output with four concurrent threads each storing 10000000 pennysort records:
+
+    [root@test7x64 xlink]# ./dbtest tstdb p 14 0 1 penny[0123]
+    started pennysort insert for penny0
+    started pennysort insert for penny1
+    started pennysort insert for penny2
+    started pennysort insert for penny3
+     real 0m59.104s
+     user 2m53.392s
+     sys  0m13.372s
+ 
 Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu

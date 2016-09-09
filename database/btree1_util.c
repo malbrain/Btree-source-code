@@ -49,10 +49,10 @@ DbAddr left;
 	else
 		return ERROR_outofmemory;
 
-	//	link in new left smaller key page
-	//	(copy latches)
+	//	copy in new smaller keys into left page
+	//	(clear the latches)
 
-	memcpy (leftPage, root->page, btree->pageSize);
+	memcpy (leftPage->latch + 1, root->page->latch + 1, btree->pageSize - sizeof(*leftPage->latch));
 	rightPage = getObj(hndl->map, right);
 	rightPage->left.bits = left.bits;
 
@@ -91,9 +91,8 @@ DbAddr left;
 	root->page->act = 2;
 	root->page->lvl++;
 
-	// release root pages
+	// release root page
 
-	btreeUnlockPage(leftPage, Btree_lockWrite);
 	btreeUnlockPage(root->page, Btree_lockWrite);
 	return OK;
 }
@@ -206,7 +205,7 @@ Status stat;
 		}
 	}
 
-	//	update lower keys to continue in old page
+	//	copy lower keys from temporary frame back into old page
 
 	if( (addr.bits = btreeNewPage(hndl, lvl)) )
 		frame = getObj(hndl->map, addr);
@@ -231,7 +230,7 @@ Status stat;
 	source = slotptr(frame, 0);
 	dest = slotptr(set->page, 0);
 
-	//  assemble page of smaller keys
+	//  assemble page of smaller keys from temporary frame copy
 
 	while( source++, cnt++ < max ) {
 		if( source->dead )
