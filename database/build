@@ -1,0 +1,1 @@
+cc -D FUTEX -O3 -g -o dbtest /home/devel/database/db/db*.c /home/devel/database/db/btree1*.c /home/devel/database/db/standalone.c -lpthread

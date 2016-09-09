@@ -389,3 +389,27 @@ DbAddr slot;
 	slot.type = type;
 	return slot.bits;
 }
+
+//
+// allocate next available object id
+//
+
+uint64_t allocObjId(DbMap *map, FreeList *list) {
+ObjId objId;
+
+	lockLatch(list->free->latch);
+
+	// see if there is a free object in the free queue
+	// otherwise create a new frame of new objects
+
+	while (!(objId.bits = getNodeFromFrame(map, list->free))) {
+		if (!getNodeWait(map, list->free, list->tail))
+			if (!initObjIdFrame(map, list->free)) {
+				unlockLatch(list->free->latch);
+				return 0;
+			}
+	}
+
+	unlockLatch(list->free->latch);
+	return objId.bits;
+}

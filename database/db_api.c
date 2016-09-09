@@ -45,18 +45,26 @@ void *cloneHandle(void *hndl) {
 int addObject(void *arg, void *obj, uint32_t size, uint64_t *result) {
 Handle *hndl = (Handle *)arg;
 Status stat = OK;
+Object *dest;
+ObjId objId;
 DbAddr addr;
-void *dest;
 
 	if (bindHandle(hndl))
-		*result = allocNode(hndl->map, hndl->freeList, -1, size, false); 
+		addr.bits = allocNode(hndl->map, hndl->freeList, -1, size + sizeof(Object), false); 
 	else
 		return ERROR_arenadropped;
 
-	addr.bits = *result;
+	objId.bits = allocObjId(hndl->map, &hndl->freeList[ObjIdType]);
 
 	dest = getObj(hndl->map, addr);
-	memcpy (dest, obj, size);
+	dest->timestamp = 0;
+	dest->version = 0;
+	dest->previous.bits = 0;
+	dest->objId.bits = objId.bits;
+	dest->size = size;
+	memcpy (dest + 1, obj, size);
+
+	*result = objId.bits;
 	return OK;
 }
 

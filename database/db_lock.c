@@ -215,7 +215,6 @@ void WriteUnlock3 (RWLock3 *lock)
 
 void ReadLock3 (RWLock3 *lock)
 {
-uint32_t spinCount = 0;
 uint32_t prev;
 uint16_t w;
 

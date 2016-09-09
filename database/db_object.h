@@ -34,6 +34,14 @@ typedef struct {
 	DbMap *map;			// pointer to map
 } Handle;
 
+typedef struct {
+	uint64_t timestamp;	// commitment timestamp
+	uint64_t version;	// version of the object
+	DbAddr previous;	// previous version of object
+	ObjId objId;		// ObjId of the object list
+	uint32_t size;		// object size
+} Object;
+
 uint64_t get64(uint8_t *from);
 void store64(uint8_t *to, uint64_t what);
 void closeHandle(Handle  *hndl);

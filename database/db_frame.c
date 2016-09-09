@@ -309,27 +309,3 @@ Frame *frame;
 
 	return true;
 }
-
-//
-// allocate next available object id
-//
-
-uint64_t allocObjId(DbMap *map, DbAddr *free, DbAddr *tail) {
-ObjId objId;
-
-	lockLatch(free->latch);
-
-	// see if there is a free object in the free queue
-	// otherwise create a new frame of new objects
-
-	while (!(objId.bits = getNodeFromFrame(map, free))) {
-		if (!tail || !getNodeWait(map, free, tail))
-			if (!initObjIdFrame(map, free)) {
-				unlockLatch(free->latch);
-				return 0;
-			}
-	}
-
-	unlockLatch(free->latch);
-	return objId.bits;
-}

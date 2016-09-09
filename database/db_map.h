@@ -14,6 +14,7 @@
 
 uint64_t allocMap(DbMap *map, uint32_t size);
 uint64_t allocObj(DbMap *map, DbAddr *free, DbAddr *wait, int type, uint32_t size, bool zeroit);
+uint64_t allocObjId(DbMap *map, FreeList *list);
 void *fetchObjSlot (DbMap *map, ObjId objId);
 void *getObj(DbMap *map, DbAddr addr); 
 
@@ -24,7 +25,6 @@ bool initObjFrame (DbMap *map, DbAddr *queue, uint32_t type, uint32_t size);
 bool addSlotToFrame(DbMap *map, DbAddr *head, uint64_t addr);
 
 void *fetchIdSlot (DbMap *map, ObjId objId);
-uint64_t allocObjId(DbMap *map, DbAddr *free, DbAddr *tail);
 uint64_t getFreeFrame(DbMap *map);
 uint64_t allocFrame(DbMap *map);
 
