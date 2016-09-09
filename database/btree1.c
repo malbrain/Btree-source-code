@@ -113,22 +113,16 @@ uint8_t *buff;
 void btreeLockPage(BtreePage *page, BtreeLock mode) {
 	switch( mode ) {
 	case Btree_lockRead:
-		ReadLock3 (page->latch->readwr);
+		ReadLock2 (page->latch->readwr);
 		break;
 	case Btree_lockWrite:
-		WriteLock3 (page->latch->readwr);
-		break;
-	case Btree_lockAccess:
-		ReadLock3 (page->latch->access);
-		break;
-	case Btree_lockDelete:
-		WriteLock3 (page->latch->access);
+		WriteLock2 (page->latch->readwr);
 		break;
 	case Btree_lockParent:
-		WriteLock3 (page->latch->parent);
+		WriteLock2 (page->latch->parent);
 		break;
 	case Btree_lockLink:
-		WriteLock3 (page->latch->link);
+		WriteLock2 (page->latch->link);
 		break;
 	}
 }
@@ -137,22 +131,16 @@ void btreeUnlockPage(BtreePage *page, BtreeLock mode)
 {
 	switch( mode ) {
 	case Btree_lockWrite:
-		WriteUnlock3 (page->latch->readwr);
+		WriteUnlock2 (page->latch->readwr);
 		break;
 	case Btree_lockRead:
-		ReadUnlock3 (page->latch->readwr);
-		break;
-	case Btree_lockAccess:
-		ReadUnlock3 (page->latch->access);
-		break;
-	case Btree_lockDelete:
-		WriteUnlock3 (page->latch->access);
+		ReadUnlock2 (page->latch->readwr);
 		break;
 	case Btree_lockParent:
-		WriteUnlock3 (page->latch->parent);
+		WriteUnlock2 (page->latch->parent);
 		break;
 	case Btree_lockLink:
-		WriteUnlock3 (page->latch->link);
+		WriteUnlock2 (page->latch->link);
 		break;
 	}
 }

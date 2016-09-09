@@ -1,4 +1,3 @@
-#pragma once
 
 #define Btree_maxkey		4096				// maximum key size in bytes
 #define Btree_maxbits		29					// maximum page size in bits
@@ -6,21 +5,17 @@
 #define Btree_minpage		(1 << Btree_minbits)	// minimum page size
 #define Btree_maxpage		(1 << Btree_maxbits)	// maximum page size
 
-//	There are six lock types for each node in four independent sets: 
-//	1. (set 1) AccessIntent: Sharable. Going to Read the node. Incompatible with NodeDelete. 
-//	2. (set 1) NodeDelete: Exclusive. About to release the node. Incompatible with AccessIntent. 
-//	3. (set 2) ReadLock: Sharable. Read the node. Incompatible with WriteLock. 
-//	4. (set 2) WriteLock: Exclusive. Modify the node. Incompatible with ReadLock and other WriteLocks. 
-//	5. (set 3) ParentModification: Exclusive. Change the node's parent keys. Incompatible with another ParentModification. 
-//	6. (set 4) LinkModification: Exclusive. Update of a node's left link is underway. Incompatible with another LinkModification. 
+//	There are four lock types for each node in three independent sets: 
+//	1. (set 1) ReadLock: Sharable. Read the node. Incompatible with WriteLock. 
+//	2. (set 1) WriteLock: Exclusive. Modify the node. Incompatible with ReadLock and other WriteLocks. 
+//	3. (set 2) ParentModification: Exclusive. Change the node's parent keys. Incompatible with another ParentModification. 
+//	4. (set 3) LinkModification: Exclusive. Update of a node's left link is underway. Incompatible with another LinkModification. 
 
 typedef enum {
-	Btree_lockAccess = 1,
-	Btree_lockDelete = 2,
-	Btree_lockRead   = 4,
-	Btree_lockWrite  = 8,
-	Btree_lockParent = 16,
-	Btree_lockLink   = 32
+	Btree_lockRead   = 1,
+	Btree_lockWrite  = 2,
+	Btree_lockParent = 4,
+	Btree_lockLink   = 8
 } BtreeLock;
 
 //	types of btree pages/allocations
@@ -49,10 +44,9 @@ typedef struct {
 //	followed by the key slots
 
 typedef struct {
-	RWLock3 readwr[1];	// read/write access lock
-	RWLock3 access[1];	// waiting for delete lock
-	RWLock3 parent[1];	// posting of fence key
-	RWLock3 link[1];		// left link update
+	RWLock2 readwr[1];	// read/write access lock
+	RWLock2 parent[1];	// posting of fence key
+	RWLock2 link[1];		// left link update
 } LatchSet;
 
 typedef struct {

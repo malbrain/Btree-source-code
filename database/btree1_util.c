@@ -500,13 +500,7 @@ DbAddr prevPageNo;
 	// determine lock mode of drill level
 
 	mode = (drill == lvl) ? lock : Btree_lockRead; 
-
- 	// obtain access lock using lock chaining with Access mode
-
 	set->page = getObj(hndl->map, set->pageNo);
-
-	if( set->pageNo.type != Btree_rootPage )
-		btreeLockPage(set->page, Btree_lockAccess);
 
 	//	release parent or left sibling page
 
@@ -515,15 +509,12 @@ DbAddr prevPageNo;
 	  prevPageNo.bits = 0;
 	}
 
- 	// obtain mode lock using lock chaining through AccessLock
+ 	// obtain mode lock
 
 	btreeLockPage(set->page, mode);
 
 	if( set->page->free )
 		return ERROR_btreestruct;
-
-	if( set->pageNo.type != Btree_rootPage )
-	  btreeUnlockPage(set->page, Btree_lockAccess);
 
 	// re-read and re-lock root after determining actual level of root
 

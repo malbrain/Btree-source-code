@@ -4,6 +4,7 @@
 
 #include <stdlib.h>
 #include <stdint.h>
+#include <limits.h>
 #include <memory.h>
 #include <errno.h>
 
@@ -17,7 +18,15 @@
 #include <process.h>
 #endif
 
-int NanoCnt[1];
+#ifdef FUTEX
+#include <linux/futex.h>
+#define SYS_futex 202
+
+int sys_futex(void *addr1, int op, int val1, struct timespec *timeout, void *addr2, int val3)
+{
+	return syscall(SYS_futex, addr1, op, val1, timeout, addr2, val3);
+}
+#endif
 
 #ifdef unix
 #define pause() asm volatile("pause\n": : : "memory")
@@ -28,7 +37,6 @@ struct timespec ts[1];
 	ts->tv_sec = 0;
 	ts->tv_nsec = cnt;
 	nanosleep(ts, NULL);
-	__sync_fetch_and_add(NanoCnt, 1);
 }
 
 int lock_spin (int *cnt) {
@@ -64,8 +72,6 @@ double conv;
 		QueryPerformanceCounter(next);
 		interval = (next->QuadPart - start->QuadPart) / conv;
 	}
-
-	_InterlockedIncrement(NanoCnt);
 }
 
 int lock_spin (uint32_t *cnt) {
@@ -89,8 +95,8 @@ volatile int idx;
 
 //	mutex implementation
 
+#ifndef FUTEX
 #ifdef unix
-
 void mutex_lock(Mutex* mutex) {
 uint32_t spinCount = 0;
 uint32_t prev;
@@ -105,8 +111,6 @@ void mutex_unlock(Mutex* mutex) {
 	asm volatile ("" ::: "memory");
 	*mutex->lock = 0;
 }
-
-
 #else
 void mutex_lock(Mutex* mutex) {
 uint32_t spinCount = 0;
@@ -121,7 +125,126 @@ void mutex_unlock(Mutex* mutex) {
 	*mutex->lock = 0;
 }
 #endif
+#else
+void mutex_lock(Mutex *mutex) {
+MutexState nxt =  LOCKED;
+uint32_t spinCount = 0;
 
+  while (__sync_val_compare_and_swap(mutex->state, FREE, nxt) != FREE)
+	while (*mutex->state != FREE)
+	  if (lock_spin (&spinCount)) {
+		if (*mutex->state == LOCKED)
+    	  if (__sync_val_compare_and_swap(mutex->state, LOCKED, CONTESTED) == FREE)
+			break;
+
+		sys_futex((void *)mutex->state, FUTEX_WAIT, CONTESTED, NULL, NULL, 0);
+		nxt = CONTESTED;
+		break;
+	  }
+}
+
+void mutex_unlock(Mutex* mutex) {
+	if (__sync_fetch_and_sub(mutex->state, 1) == CONTESTED)  {
+   		*mutex->state = FREE;
+ 		sys_futex( (void *)mutex->state, FUTEX_WAKE, 1, NULL, NULL, 0);
+   }
+}
+#endif
+
+#ifdef FUTEX
+//  a phase fair reader/writer lock implementation
+
+void WriteLock3(RWLock3 *lock)
+{
+uint32_t spinCount = 0;
+uint16_t w, r, tix;
+uint32_t prev;
+
+	tix = __sync_fetch_and_add (lock->ticket, 1);
+
+	// wait for our ticket to come up in serving
+
+	while( 1 ) {
+		prev = lock->rw[1];
+		if( tix == (uint16_t)prev )
+		  break;
+
+		// add ourselves to the waiting for write ticket queue
+
+		sys_futex( (void *)&lock->rw[1], FUTEX_WAIT_BITSET, prev, NULL, NULL, QueWr );
+	}
+
+	// wait for existing readers to drain while allowing new readers queue
+
+	w = PRES | (tix & PHID);
+	r = __sync_fetch_and_add (lock->rin, w);
+
+	while( 1 ) {
+		prev = lock->rw[0];
+		if( r == (uint16_t)(prev >> 16))
+		  break;
+
+		// we're the only writer waiting on the readers ticket number
+
+		sys_futex( (void *)&lock->rw[0], FUTEX_WAIT_BITSET, prev, NULL, NULL, QueWr );
+	}
+}
+
+void WriteUnlock3 (RWLock3 *lock)
+{
+	// clear writer waiting and phase bit
+	//	and advance writer ticket
+
+	__sync_fetch_and_and (lock->rin, ~MASK);
+	lock->serving[0]++;
+
+	if( (*lock->rin & ~MASK) != (*lock->rout & ~MASK) )
+	  if( sys_futex( (void *)&lock->rw[0], FUTEX_WAKE_BITSET, INT_MAX, NULL, NULL, QueRd ) )
+		return;
+
+	//  is writer waiting (holding a ticket)?
+
+	if( *lock->ticket == *lock->serving )
+		return;
+
+	//	are rest of writers waiting for this writer to clear?
+	//	(have to wake all of them so ticket holder can proceed.)
+
+	sys_futex( (void *)&lock->rw[1], FUTEX_WAKE_BITSET, INT_MAX, NULL, NULL, QueWr );
+}
+
+void ReadLock3 (RWLock3 *lock)
+{
+uint32_t spinCount = 0;
+uint32_t prev;
+uint16_t w;
+
+	w = __sync_fetch_and_add (lock->rin, RINC) & MASK;
+
+	if( w )
+	  while( 1 ) {
+		prev = lock->rw[0];
+		if( w != (prev & MASK))
+		  break;
+		sys_futex( (void *)&lock->rw[0], FUTEX_WAIT_BITSET, prev, NULL, NULL, QueRd );
+	  }
+}
+
+void ReadUnlock3 (RWLock3 *lock)
+{
+	__sync_fetch_and_add (lock->rout, RINC);
+
+	// is a writer waiting for this reader to finish?
+
+	if( *lock->rin & PRES )
+	  sys_futex( (void *)&lock->rw[0], FUTEX_WAKE_BITSET, 1, NULL, NULL, QueWr );
+
+	// is a writer waiting for reader cycle to finish?
+
+	else if( *lock->ticket != *lock->serving )
+	  sys_futex( (void *)&lock->rw[1], FUTEX_WAKE_BITSET, INT_MAX, NULL, NULL, QueWr );
+}
+#endif
 //	simple Phase-Fair FIFO rwlock
 
 void WriteLock1 (RWLock1 *lock)
@@ -178,8 +301,7 @@ void ReadUnlock1 (RWLock1 *lock)
 # endif
 }
 
-//	reader/writer lock implementation
-//	mutex based
+//	mutex based reader-writer lock
 
 void WriteLock2 (RWLock2 *lock)
 {
@@ -216,6 +338,7 @@ void ReadUnlock2 (RWLock2 *lock)
 		mutex_unlock(lock->wrt);
 }
 
+#ifndef FUTEX
 void WriteLock3 (RWLock3 *lock)
 {
 uint32_t spinCount = 0;
@@ -281,6 +404,7 @@ void ReadUnlock3 (RWLock3 *lock)
 	_InterlockedExchangeAdd16 (lock->rout, RINC);
 #endif
 }
+#endif
 
 #ifdef STANDALONE
 #include <stdio.h>
