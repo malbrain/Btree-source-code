@@ -3,13 +3,7 @@ Btree-source-code/database
 
 A working project for High-concurrency B-tree/Database source code in C.
 
-Compilation is achieved on linux or Windows by:
-
-gcc -O3 -o dbtest *.c -lpthread
-
-or
-
-cl /Ox /Fe dbtest.exe *.c
+Compile with ./build or build.bat
 
 The runtime options are:
 
