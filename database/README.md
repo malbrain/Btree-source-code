@@ -71,4 +71,7 @@ Sample output with four concurrent threads each storing 10000000 pennysort recor
      user 2m53.392s
      sys  0m13.372s
  
+    -rw-r--r-- 1 root root 4294836224 Sep  9 00:24 tstdb
+    -rw-r--r-- 1 root root 2147090432 Sep  9 00:24 tstdb.index
+
 Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu
