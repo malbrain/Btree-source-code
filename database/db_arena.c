@@ -230,6 +230,7 @@ uint32_t bits;
 	map->arena->nextObject.offset = segOffset >> 3;
 	map->arena->objSize = arenaDef->objSize;
 	map->arena->segs->size = initSize;
+	map->arena->segBits = bits;
 	map->arena->delTs = 1;
 	map->arenaDef = arenaDef;
 	map->created = true;
@@ -254,39 +255,46 @@ bool newSeg(DbMap *map, uint32_t minSize) {
 uint64_t size = map->arena->segs[map->arena->currSeg].size;
 uint64_t off = map->arena->segs[map->arena->currSeg].off;
 uint32_t nextSeg = map->arena->currSeg + 1;
+uint64_t nextSize;
 
-	minSize += sizeof(DbSeg);
 	off += size;
 
 	// bootstrapping new inMem arena?
-	// or allocating segment one?
 
-	if (!size) {
-		size = MIN_segsize / 2;
+	if (map->arena->segBits == 0) {
+		map->arena->segBits = MIN_segbits - 1;
+		nextSize = MIN_segsize;
 		nextSeg = 0;
-	} else if (!map->arena->currSeg)
-		size >>= 1;
+	} else
+		nextSize = 1ULL << map->arena->segBits;
 
-	// double the current size up to 32GB
+	while (nextSize < minSize)
+	 	if (map->arena->segBits++ < MAX_segbits)
+			nextSize += nextSeg ? 1ULL << map->arena->segBits : nextSize;
+		else
+			fprintf(stderr, "newSeg segment overrun: %d\n", minSize), exit(1);
 
-	do size <<= 1;
-	while (size < minSize);
+	if (map->arena->segBits < MAX_segbits)
+		map->arena->segBits++;
 
-	if (size < MIN_segsize)
-		size = MIN_segsize;
+	if (nextSize > 1ULL << MAX_segbits)
+		nextSize = 1ULL << MAX_segbits;
 
-	if (size > 32ULL * 1024 * 1024 * 1024)
-		size = 32ULL * 1024 * 1024 * 1024;
+#ifdef _WIN32
+	assert(__popcnt(off + nextSize) == 1);
+#else
+	assert(__builtin_popcountll(off + nextSize) == 1);
+#endif
 
 	map->arena->segs[nextSeg].off = off;
-	map->arena->segs[nextSeg].size = size;
+	map->arena->segs[nextSeg].size = nextSize;
 	map->arena->segs[nextSeg].nextObj.segment = nextSeg;
 
 	//  extend the disk file, windows does this automatically
 
 #ifndef _WIN32
 	if (map->hndl >= 0)
-	  if (ftruncate(map->hndl, (off + size))) {
+	  if (ftruncate(map->hndl, (off + nextSize))) {
 		fprintf (stderr, "Unable to initialize file %s, error = %d", map->path + map->pathOff, errno);
 		return false;
 	  }

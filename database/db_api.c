@@ -99,13 +99,15 @@ ObjId objId;
 DbAddr addr;
 
 	if (bindHandle(docStore))
-		addr.bits = allocNode(docStore->map, docStore->array->list, -1, size + sizeof(Document), false); 
+	  if ((addr.bits = allocNode(docStore->map, docStore->array->list, -1, size + sizeof(Document), false)))
+		doc = getObj(docStore->map, addr);
+	  else
+		return ERROR_outofmemory;
 	else
 		return ERROR_arenadropped;
 
 	objId.bits = allocObjId(docStore->map, &docStore->array->list[ObjIdType]);
 
-	doc = getObj(docStore->map, addr);
 	memset (doc, 0, sizeof(Document));
 	doc->objId.bits = objId.bits;
 	doc->txn.bits = txnAddr;

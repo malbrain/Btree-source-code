@@ -1,9 +1,7 @@
 Btree-source-code/btree2
 ========================
 
-A working project for High-concurrency B-tree source code in C.
-
-Here are files in the btree source code:
+Here are files in the btree project:
 
 btree2s.c       Single Threaded/MultiProcess version that removes keys all the way back to an original empty btree, placing removed nodes on a free list.  Operates under either memory mapping or file I/O.  Recommended btrees hosted on network file systems.
 

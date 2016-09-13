@@ -285,6 +285,7 @@ double start, stop;
 #ifdef unix
 pthread_t *threads;
 #else
+SYSTEM_INFO info[1];
 HANDLE *threads;
 #endif
 ThreadArg *args;
@@ -296,6 +297,10 @@ void *database;
 void *docStore;
 void *index;
 
+#ifdef _WIN32
+	GetSystemInfo(info);
+	fprintf(stderr, "PageSize: %d, # Processors: %d, Allocation Granularity: %d\n\n", info->dwPageSize, info->dwNumberOfProcessors, info->dwAllocationGranularity);
+#endif
 	if( argc < 3 ) {
 		fprintf (stderr, "Usage: %s db_name cmds [page_bits leaf_xtra on_disk src_file1 src_file2 ... ]\n", argv[0]);
 		fprintf (stderr, "  where db_name is the prefix name of the database file\n");
