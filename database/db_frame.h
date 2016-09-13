@@ -9,3 +9,5 @@ typedef struct {
 	DbAddr slots[FrameSlots];// array of waiting/free slots
 } Frame;
 
+void returnFreeFrame(DbMap *map, DbAddr slot);
+

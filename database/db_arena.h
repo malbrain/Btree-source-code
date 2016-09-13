@@ -15,32 +15,68 @@
 
 enum MapType {
 	NotSetYet = 0,
-	ObjStoreType,
+	DatabaseType,
+	DocStoreType,
 	BtreeIndexType
 };
+
+//	Database transactions: ObjId
+//	entries in the database arena
+
+typedef struct {
+	DbAddr txnFrame[1];	// head of frames containing txn steps
+	uint64_t timestamp;	// txn committed timestamp
+} Txn;
+
+//	Transaction steps
+
+typedef struct {
+	ObjId objId;		// ObjId for the docStore
+	uint16_t objIdx;	// arena entry idx for the docStore
+	uint16_t subIdx;	// docStore arena entry idx for the index
+	uint32_t size;		// transaction step object size
+} TxnStep;
 
 //  on disk arena segment
 
 typedef struct {
-	uint64_t off;		// file offset of the segment
+	uint64_t off;		// file offset of segment
 	uint64_t size;		// size of the segment
 	ObjId nextObj;		// highest object ID in use
 } DbSeg;
+
+//  Child arena specifications
+
+typedef struct ArenaDef_ {
+	DbAddr node;				// database redblack node
+	uint64_t id;				// arena id
+	uint64_t arenaId;			// highest arenaId issued
+	uint64_t initSize;			// initial arena size
+	uint32_t localSize;			// extra space after DbMap
+	uint32_t baseSize;			// extra space after DbArena
+	uint32_t objSize;			// size of ObjectId array slot
+	uint16_t cmd;				// 0 = add, 1 = delete
+	uint16_t idx;				// arena handle array index
+	uint8_t onDisk;				// arena onDisk/inMemory
+	DbAddr next, prev;			// linked list
+	DbAddr arenaHndlIdx[1];		// allocate local arena handles
+	DbAddr arenaIdList[1];		// head of arena id list
+	DbAddr arenaNames[1];		// arena name red/black tree
+} ArenaDef;
 
 //  on disk/mmap arena seg zero
 
 struct DbArena_ {
 	DbSeg segs[MAX_segs]; 		// segment meta-data
 	uint64_t lowTs, delTs;		// low hndl ts, Incr on delete
-	DbAddr freeBlk[MAX_blk];	// list of free frames in frames
-	DbAddr handleArray[1];		// permanent handle array
-	DbAddr freeFrame[1];		// list of free frames in frames
+	DbAddr freeBlk[MAX_blk];	// free blocks in frames
+	DbAddr handleArray[1];		// arena handle array
+	DbAddr freeFrame[1];		// free frames in frames
 	DbAddr nextObject;			// next Object address
 	uint64_t objCount;			// overall number of objects
 	uint64_t objSpace;			// overall size of objects
 	uint32_t objSize;			// size of object array element
-	uint8_t currSeg;			// index of highest segment
-	char newHndl[1];			// handle allocation lock
+	uint16_t currSeg;			// index of highest segment
 	char mutex[1];				// arena allocation lock/drop flag
 	char type[1];				// arena type
 };
@@ -50,23 +86,27 @@ struct DbArena_ {
 struct DbMap_ {
 	char *base[MAX_segs];	// pointers to mapped segment memory
 #ifndef _WIN32
-	int hndl[1];			// OS file handle
+	int hndl;				// OS file handle
 #else
-	HANDLE hndl[MAX_segs];
+	HANDLE hndl;
 	HANDLE maphndl[MAX_segs];
 #endif
+	DbMap *parent;			// ptr to parent
+	DbMap *database;		// ptr to database
 	DbArena *arena;			// ptr to mapped seg zero
-	DbAddr hndlArray[1];	// local handle array
-	char path[MAX_path];	// path to file
-	uint16_t hndlCnt[1];	// number of handles outstanding
+	char path[MAX_path];	// file database path
+	DbAddr arenaMaps[1];	// array of DbMap pointers for open children
+	DbAddr hndlArray[1];	// array of open handles issued for this arena
+	ArenaDef *arenaDef;		// our arena definition
+	uint64_t arenaId;		// last arena arenaId processsed
+	uint16_t pathOff;		// start of path in buffer
 	uint16_t maxSeg;		// maximum segment array index in use
+	uint16_t myIdx;			// our index in parent's handle table
 	char mapMutex[1];		// segment mapping mutex
-	char onDisk;			// on disk bool flag
 	char created;			// set if map created
+	char onDisk;			// on disk bool flag
 };
 
-void *createMap(char *path, uint32_t baseSize, uint32_t idSize, uint64_t initSize, bool onDisk);
-void returnFreeFrame(DbMap *map, DbAddr slot);
 
 /**
  *  memory mapping
@@ -75,13 +115,13 @@ void returnFreeFrame(DbMap *map, DbAddr slot);
 void* mapMemory(DbMap *map, uint64_t offset, uint64_t size, uint32_t segNo);
 void unmapSeg(DbMap *map, uint32_t segNo);
 bool mapSeg(DbMap *map, uint32_t segNo);
-void closeMap(DbMap *map);
 
 bool newSeg(DbMap *map, uint32_t minSize);
 void mapSegs(DbMap *map);
 
+int getPath(char *path, int off, char *name, int len, DbMap *parent);
 #ifdef _WIN32
-HANDLE openPath(char *name, uint32_t segNo);
+HANDLE openPath(char *name);
 #else
-int openPath(char *name, uint32_t segNo);
+int openPath(char *name);
 #endif

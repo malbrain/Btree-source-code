@@ -7,6 +7,8 @@
 #include <assert.h>
 #include <stdlib.h>
 
+#include "db_error.h"
+
 typedef union {
 	struct {
 		uint32_t offset;	// offset in the segment
@@ -33,6 +35,8 @@ typedef union {
 		uint64_t fill:16;
 	};
 } DbAddr;
+
+#define ADDR_MUTEX_SET 0x0000000000001
 
 typedef union {
 	struct {

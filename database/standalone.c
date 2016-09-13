@@ -72,7 +72,7 @@ typedef struct {
 	char idx;
 	char *type;
 	char *infile;
-	void *objStore;
+	void *docStore;
 	void *index;
 	int num;
 } ThreadArg;
@@ -90,13 +90,13 @@ int line = 0, found = 0, cnt = 0, idx;
 int ch, len = 0, slot, type = 0;
 unsigned char key[4096];
 ThreadArg *args = arg;
-uint64_t objAddr;
-void *objStore;
+uint64_t objId;
+void *docStore;
 void *index;
 int stat;
 FILE *in;
 
-	objStore = cloneHandle(args->objStore);
+	docStore = cloneHandle(args->docStore);
 	index = cloneHandle(args->index);
 
 	if( args->idx < strlen (args->type) )
@@ -128,10 +128,10 @@ FILE *in;
 #endif
 			  line++;
 
-			  if ((stat = addObject (objStore, key + 10, len - 10, &objAddr)))
+			  if ((stat = addDocument (docStore, key + 10, len - 10, &objId, 0)))
 				  fprintf(stderr, "Add Error %d Line: %d\n", stat, line), exit(0);
 			  len = 10;
-			  len += addObjId(key + len, objAddr);
+			  len += addObjId(key + len, objId);
 
 			  if ((stat = insertKey(index, key, len)))
 				  fprintf(stderr, "Key Error %d Line: %d\n", stat, line), exit(0);
@@ -292,7 +292,8 @@ float elapsed;
 int num = 0;
 char key[1];
 bool onDisk = true;
-void *objStore;
+void *database;
+void *docStore;
 void *index;
 
 	if( argc < 3 ) {
@@ -327,15 +328,16 @@ void *index;
 #endif
 	args = malloc (cnt * sizeof(ThreadArg));
 
-	objStore = createObjStore(argv[1], onDisk);
-	index = createIndex(argv[1], "index", bits, xtra, onDisk);
+	database = openDatabase(argv[1], strlen(argv[1]), onDisk);
+	docStore = openDocStore(database, "documents", strlen("documents"), onDisk);
+	index = createIndex(docStore, "index", strlen("index"), bits, xtra, onDisk);
 
 	//	fire off threads
 
 	for( idx = 0; idx < cnt; idx++ ) {
 		args[idx].infile = argv[idx + 6];
 		args[idx].type = argv[2];
-		args[idx].objStore = objStore;
+		args[idx].docStore = docStore;
 		args[idx].index = index;
 		args[idx].num = num;
 		args[idx].idx = idx;

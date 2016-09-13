@@ -8,30 +8,79 @@ void initialize() {
 	memInit();
 }
 
-void *createObjStore(char *path, bool onDisk) {
-Handle *hndl = createMap(path, 0, sizeof(ObjId), 0, onDisk);
+void *openDatabase(char *name, uint32_t nameLen, bool onDisk) {
+ArenaDef arenaDef[1];
+DbMap *map;
 
-	if (hndl->map->created)
-		hndl->map->arena->type[0] = ObjStoreType;
+	memset (arenaDef, 0, sizeof(ArenaDef));
+	arenaDef->baseSize = sizeof(ArenaDef);
+	arenaDef->objSize = sizeof(Txn);
+	arenaDef->onDisk = onDisk;
 
-	return hndl;
+	map = openMap(NULL, name, nameLen, arenaDef);
+
+	if (!map)
+		return NULL;
+
+	if (map->created)
+		map->arena->type[0] = DatabaseType;
+
+	map->arenaDef = (ArenaDef *)(map->arena + 1);
+	memcpy(map->arenaDef, arenaDef, sizeof(arenaDef));
+	return makeHandle(map);
 }
 
-void *createIndex(char *docStore, char *idxName, int bits, int xtra, bool onDisk) {
-int len = strlen(docStore);
-char path[4096];
-Handle *hndl;
+void *openDocStore(void *hndl, char *path, uint32_t pathLen, bool onDisk) {
+Handle *database = (Handle *)hndl;
+DbMap *map;
 
-	memcpy (path, docStore, len);
-	path[len++] = '.';
-	strcpy (path + len, idxName);
+	if (bindHandle(database))
+		map = createMap(database->map, path, pathLen, 0, 0, sizeof(ObjId), 0, onDisk);
+	else
+		return NULL;
 
-	hndl = createMap(path, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
+	releaseHandle(database);
 
-	if (hndl->map->created)
-		btreeInit(hndl);
+	if (map->created)
+		map->arena->type[0] = DocStoreType;
 
-	return hndl;
+	return makeHandle(map);
+}
+
+void *createIndex(void *hndl, char *name, uint32_t nameLen, int bits, int xtra, bool onDisk) {
+Handle *index, *docStore = (Handle *)hndl;
+BtreeIndex *btree;
+DbMap *map;
+
+	if (bits > Btree_maxbits) {
+		fprintf(stderr, "createIndex: bits = %d > max = %d\n", bits, Btree_maxbits);
+		exit(1);
+	}
+
+	if (bits + xtra > Btree_maxbits) {
+		fprintf(stderr, "createIndex: bits = %d + xtra = %d > max = %d\n", bits, xtra, Btree_maxbits);
+		exit(1);
+	}
+
+	if (bindHandle(docStore))
+		map = createMap(docStore->map, name, nameLen, 0, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
+	else
+		return NULL;
+
+	if (!map)
+		return NULL;
+
+	index = makeHandle(map);
+
+	btree = btreeIndex(map);
+	btree->pageSize = 1 << bits;
+	btree->pageBits = bits;
+	btree->leafXtra = xtra;
+
+	if (map->created)
+		btreeInit(index);
+
+	return index;
 }
 
 void *createCursor(void *index) {
@@ -42,42 +91,56 @@ void *cloneHandle(void *hndl) {
 	return (void *)makeHandle(((Handle *)hndl)->map);
 }
 
-int addObject(void *arg, void *obj, uint32_t size, uint64_t *result) {
-Handle *hndl = (Handle *)arg;
+int addDocument(void *hndl, void *obj, uint32_t size, uint64_t *result, uint64_t txnAddr) {
+Handle *docStore = (Handle *)hndl;
 Status stat = OK;
-Object *dest;
+Document *doc;
 ObjId objId;
 DbAddr addr;
 
-	if (bindHandle(hndl))
-		addr.bits = allocNode(hndl->map, hndl->freeList, -1, size + sizeof(Object), false); 
+	if (bindHandle(docStore))
+		addr.bits = allocNode(docStore->map, docStore->array->list, -1, size + sizeof(Document), false); 
 	else
 		return ERROR_arenadropped;
 
-	objId.bits = allocObjId(hndl->map, &hndl->freeList[ObjIdType]);
+	objId.bits = allocObjId(docStore->map, &docStore->array->list[ObjIdType]);
 
-	dest = getObj(hndl->map, addr);
-	dest->timestamp = 0;
-	dest->version = 0;
-	dest->previous.bits = 0;
-	dest->objId.bits = objId.bits;
-	dest->size = size;
-	memcpy (dest + 1, obj, size);
+	doc = getObj(docStore->map, addr);
+	memset (doc, 0, sizeof(Document));
+	doc->objId.bits = objId.bits;
+	doc->txn.bits = txnAddr;
+	doc->size = size;
+
+	memcpy (doc + 1, obj, size);
 
 	*result = objId.bits;
 	return OK;
 }
 
-int insertKey(void *index, uint8_t *key, uint32_t len) {
-Handle *hndl = (Handle *)index;
-int stat;
+int commitDocument(void *hndl, uint64_t document) {
+Handle *docStore = (Handle *)hndl;
+Document *doc;
+ObjId docId;
 
-	if (bindHandle(hndl))
-		stat = btreeInsertKey(hndl, key, len, 0, Btree_indexed);
+	if (bindHandle(docStore))
+		docId.bits = document;
 	else
 		return ERROR_arenadropped;
 
-	releaseHandle(hndl);
+	doc = fetchObjSlot(docStore->map, docId);
+	return OK;
+}
+
+int insertKey(void *hndl, uint8_t *key, uint32_t len) {
+Handle *index = (Handle *)hndl;
+int stat;
+
+	if (bindHandle(index))
+		stat = btreeInsertKey(index, key, len, 0, Btree_indexed);
+	else
+		return ERROR_arenadropped;
+
+	releaseHandle(index);
 	return stat;
 }
 

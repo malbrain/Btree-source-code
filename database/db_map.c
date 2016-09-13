@@ -20,19 +20,40 @@
 #include "db_arena.h"
 #include "db_map.h"
 
-#ifdef _WIN32
-HANDLE openPath(char *path, uint32_t segNo) {
-int off = strlen(path);
-int init = off;
-HANDLE hndl;
+//  assemble filename path
 
-	strcpy (path + off, "._seg000");
-	off += 8;
+int getPath(char *path, int off, char *name, int len, DbMap *parent) {
+int idx;
 
-	while (segNo) {
-		path[--off] += segNo % 10;
-		segNo /= 10;
+	path[--off] = 0;
+
+	if (off > len)
+		off -= len;
+	else
+		return -1;
+
+	memcpy(path + off, name, len);
+
+	//  prepend parent name
+
+	if (parent) {
+		path[--off] = '.';
+		len = MAX_path - parent->pathOff - 1;
+
+		if (off > len)
+			off -= len;
+		else
+			return -1;
+
+		memcpy(path + off, parent->path + parent->pathOff, len);
 	}
+
+	return off;
+}
+
+#ifdef _WIN32
+HANDLE openPath(char *path) {
+HANDLE hndl;
 
 	hndl = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
@@ -41,11 +62,10 @@ HANDLE hndl;
 		return NULL;
 	}
 
-	path[init] = 0;
 	return hndl;
 }
 #else
-int openPath(char *path, uint32_t segNo) {
+int openPath(char *path) {
 int hndl, flags;
 
 	flags = O_RDWR | O_CREAT;
@@ -135,97 +155,34 @@ int32_t atomicOr32(volatile int32_t *value, int32_t amt) {
 #endif
 }
 
-#ifdef _WIN32
-void lockArena (HANDLE hndl, char *path) {
-OVERLAPPED ovl[1];
-
-	memset (ovl, 0, sizeof(ovl));
-	ovl->OffsetHigh = 0x80000000;
-
-	if (LockFileEx (hndl, LOCKFILE_EXCLUSIVE_LOCK, 0, sizeof(DbArena), 0, ovl))
-		return;
-
-	fprintf (stderr, "Unable to lock %s, error = %d", path, (int)GetLastError());
-	exit(1);
-}
-#else
-void lockArena (int hndl, char *path) {
-struct flock lock[1];
-
-	memset (lock, 0, sizeof(lock));
-	lock->l_len = sizeof(DbArena);
-	lock->l_type = F_WRLCK;
-
-	if (!fcntl(hndl, F_SETLKW, lock))
-		return;
-
-	fprintf (stderr, "Unable to lock %s, error = %d", path, errno);
-	exit(1);
-}
-#endif
-
-#ifdef _WIN32
-void unlockArena (HANDLE hndl, char *path) {
-OVERLAPPED ovl[1];
-
-	memset (ovl, 0, sizeof(ovl));
-	ovl->OffsetHigh = 0x80000000;
-
-	if (UnlockFileEx (hndl, 0, sizeof(DbArena), 0, ovl))
-		return;
-
-	fprintf (stderr, "Unable to unlock %s, error = %d", path, (int)GetLastError());
-	exit(1);
-}
-#else
-void unlockArena (int hndl, char *path) {
-struct flock lock[1];
-
-	memset (lock, 0, sizeof(lock));
-	lock->l_len = sizeof(DbArena);
-	lock->l_type = F_UNLCK;
-
-	if (!fcntl(hndl, F_SETLKW, lock))
-		return;
-
-	fprintf (stderr, "Unable to unlock %s, error = %d", path, errno);
-	exit(1);
-}
-#endif
-
 void *mapMemory (DbMap *map, uint64_t offset, uint64_t size, uint32_t segNo) {
 void *mem;
 
 #ifndef _WIN32
 int flags = MAP_SHARED;
 
-	if( map->hndl[0] < 0 )
+	if( map->hndl < 0 )
 		flags |= MAP_ANON;
 
-	mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags, map->hndl[0], offset);
+	mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags, map->hndl, offset);
 
 	if (mem == MAP_FAILED) {
-		fprintf (stderr, "Unable to mmap %s, offset = %llx, error = %d", map->path, offset, errno);
+		fprintf (stderr, "Unable to mmap %s, offset = %llx, size = %llx, error = %d", map->path + map->pathOff, offset, size, errno);
 		return NULL;
 	}
 #else
 	if (!map->onDisk)
 		return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
-	map->hndl[segNo] = openPath(map->path, segNo);
-	
-	if (map->hndl[segNo] == INVALID_HANDLE_VALUE)
-		return NULL;
-
-	if (!(map->maphndl[segNo] = CreateFileMapping(map->hndl[segNo], NULL, PAGE_READWRITE, (DWORD)(size >> 32), (DWORD)(size), NULL))) {
-		fprintf (stderr, "Unable to CreateFileMapping %s, size = %llx, segment = %d error = %d\n", map->path, size, segNo, (int)GetLastError());
+	if (!(map->maphndl[segNo] = CreateFileMapping(map->hndl, NULL, PAGE_READWRITE, (DWORD)((offset + size) >> 32), (DWORD)(offset + size), NULL))) {
+		fprintf (stderr, "Unable to CreateFileMapping %s, size = %llx, segment = %d error = %d\n", map->path + map->pathOff, offset + size, segNo, (int)GetLastError());
 		return NULL;
 	}
 
-	mem = MapViewOfFile(map->maphndl[segNo], FILE_MAP_WRITE, 0, 0, size);
+	mem = MapViewOfFile(map->maphndl[segNo], FILE_MAP_WRITE, offset >> 32, offset, size);
 
 	if (!mem) {
-		fprintf (stderr, "Unable to CreateFileMapping %s, size = %llx, error = %d\n", map->path, size, (int)GetLastError());
+		fprintf (stderr, "Unable to MapViewOfFile %s, offset = %llx, size = %llx, error = %d\n", map->path + map->pathOff, offset, size, (int)GetLastError());
 		return NULL;
 	}
 #endif
@@ -234,16 +191,18 @@ int flags = MAP_SHARED;
 }
 
 void unmapSeg (DbMap *map, uint32_t segNo) {
+char *base = segNo ? map->base[segNo] : 0ULL;
+
 #ifndef _WIN32
-	munmap(map->base[segNo], map->arena->segs[segNo].size);
-	close (*map->hndl);
+	munmap(base, map->arena->segs[segNo].size);
+	close (map->hndl);
 #else
 	if (!map->onDisk) {
-		VirtualFree(map->base[segNo], 0, MEM_RELEASE);
+		VirtualFree(base, 0, MEM_RELEASE);
 		return;
 	}
 
-	UnmapViewOfFile(map->base[segNo]);
+	UnmapViewOfFile(map->base);
 	CloseHandle(map->maphndl[segNo]);
 #endif
 }

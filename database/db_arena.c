@@ -9,116 +9,190 @@
 #endif
 
 #include "db.h"
-#include "db_object.h"
-#include "db_arena.h"
 #include "db_map.h"
+#include "db_object.h"
+#include "db_redblack.h"
+#include "db_arena.h"
 
 extern DbMap memMap[1];
 
+DbMap *initMap (DbMap *map, ArenaDef *arenaDef);
 bool mapSeg (DbMap *map, uint32_t currSeg);
 void mapZero(DbMap *map, uint64_t size);
 void mapAll (DbMap *map);
 
-//  create/open a Object store/index arena file
+// return existing arena in parent's child list or NULL
+//	call with parent arenaNames r/b tree locked
 
-void *createMap(char *path, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
+DbMap *arenaMap(DbMap *parent, char *name, uint32_t nameLen, PathStk *path) {
+DbMap **catalog, *database = parent->database;
+ArenaDef *arenaDef;
+RedBlack *entry;
+
+	if ((entry = rbFind(database, parent->arenaDef->arenaNames, name, nameLen, path))) {
+		arenaDef = rbPayload(entry);
+		catalog = arrayElement(database, parent->arenaMaps, arenaDef->idx, sizeof(*catalog));
+		//	see if our arena has already been opened in our process
+
+		if (!*catalog)
+			*catalog = openMap(parent, entry->key, entry->keyLen, rbPayload(entry));
+		return *catalog;
+	}
+
+	return NULL;
+}
+
+//  open/create arena
+
+DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
+DbMap *map, *database = parent->database;
+ArenaDef *arenaDef;
+DbMap **catalog;
+PathStk path[1];
+RedBlack *entry;
+
+	//	see if this arena ArenaDef already exists
+
+	lockLatch(parent->arenaDef->arenaNames->latch);
+
+	if ((map = arenaMap(parent, name, nameLen, path))) {
+		unlockLatch(parent->arenaDef->arenaNames->latch);
+		return map;
+	}
+
+	// otherwise, create new database ArenaDef entry
+
+	if ((entry = rbNew(database, name, nameLen, sizeof(ArenaDef))))
+		arenaDef = rbPayload(entry);
+	else {
+		unlockLatch(parent->arenaDef->arenaNames->latch);
+		return NULL; // out of memory
+	}
+
+	arenaDef->idx = arrayAlloc(parent, parent->arenaDef->arenaHndlIdx, 0);
+	arenaDef->id = atomicAdd64(&parent->arenaDef->arenaId, 1);
+	arenaDef->node.bits = entry->addr.bits;
+	arenaDef->onDisk = onDisk;
+ 	arenaDef->next.bits = 0;
+ 	arenaDef->prev.bits = 0;
+	arenaDef->cmd = 0;
+
+	map = openMap(parent, name, nameLen, arenaDef);
+
+	catalog = arrayAssign(parent, parent->arenaMaps, arenaDef->idx, sizeof(*catalog));
+	*catalog = map;
+
+	//	add arena as parent child arena
+
+	rbAdd(parent, parent->arenaDef->arenaNames, entry, path);
+	unlockLatch(parent->arenaDef->arenaNames->latch);
+	return map;
+}
+
+//  open/create an Object database/store/index arena file
+//	call with arenaNames locked
+
+DbMap *openMap(DbMap *parent, char *name, uint32_t nameLen, ArenaDef *arenaDef) {
+DbArena *segZero = NULL;
+int pathOff;
+DbMap *map;
 
 #ifdef _WIN32
-HANDLE fileHndl;
 DWORD amt = 0;
 #else
-int fileHndl;
 int32_t amt = 0;
 #endif
 
-DbArena *segZero = NULL;
+	map = db_malloc(sizeof(DbMap) + arenaDef->localSize, true);
+	map->pathOff = getPath(map->path, MAX_path, name, nameLen, parent);
+
+	if ((map->parent = parent))
+		map->database = parent->database;
+	else
+		map->database = map;
+
+	if (!(map->onDisk = arenaDef->onDisk)) {
+#ifdef _WIN32
+		map->hndl = INVALID_HANDLE_VALUE;
+#else
+		map->hndl = -1;
+#endif
+		initMap(map, arenaDef);
+		return map;
+	}
+
+	//	open the onDisk arena file
+
+#ifdef _WIN32
+	map->hndl = openPath (map->path + map->pathOff);
+
+	if (map->hndl == INVALID_HANDLE_VALUE) {
+		db_free(map);
+		return NULL;
+	}
+
+	segZero = VirtualAlloc(NULL, sizeof(DbArena), MEM_COMMIT, PAGE_READWRITE);
+
+	if (!ReadFile(map->hndl, segZero, sizeof(DbArena), &amt, NULL)) {
+		fprintf (stderr, "Unable to read %lld bytes from %s, error = %d", sizeof(DbArena), map->path + map->pathOff, errno);
+		VirtualFree(segZero, 0, MEM_RELEASE);
+		CloseHandle(map->hndl);
+		db_free(map);
+		return NULL;
+	}
+#else
+	map->hndl = openPath (map->path + map->pathOff);
+
+	if (map->hndl == -1) {
+		db_free(map);
+		return NULL;
+	}
+
+	// read first part of segment zero if it exists
+
+	segZero = valloc(sizeof(DbArena));
+
+	amt = pread(map->hndl, segZero, sizeof(DbArena), 0LL);
+
+	if (amt < 0) {
+		fprintf (stderr, "Unable to read %d bytes from %s, error = %d", (int)sizeof(DbArena), map->path + map->pathOff, errno);
+		free(segZero);
+		close(map->hndl);
+		db_free(map);
+		return NULL;
+	}
+#endif
+	if (amt < sizeof(DbArena)) {
+		initMap(map, arenaDef);
+		return map;
+	}
+
+	//  since segment zero exists, map the arena
+
+	mapZero(map, segZero->segs->size);
+#ifdef _WIN32
+	VirtualFree(segZero, 0, MEM_RELEASE);
+#else
+	free(segZero);
+#endif
+
+	map->arenaDef = arenaDef;
+
+	// wait for initialization to finish
+
+	waitNonZero(map->arena->type);
+	return map;
+}
+
+//	finish creating new arena
+//	call with arena locked
+
+DbMap *initMap (DbMap *map, ArenaDef *arenaDef) {
+uint64_t initSize = arenaDef->initSize;
 uint32_t segOffset;
-Handle *hndl;
-DbMap *map;
+uint32_t bits;
 
-	map = db_malloc(sizeof(DbMap), true);
-	map->onDisk = onDisk;
-	strncpy(map->path, path, sizeof(map->path));
-
-	if (onDisk) {
-#ifdef _WIN32
-		fileHndl = openPath (map->path, 0);
-
-		if (fileHndl == INVALID_HANDLE_VALUE) {
-			db_free(map);
-			return NULL;
-		}
-
-		segZero = VirtualAlloc(NULL, sizeof(DbArena), MEM_COMMIT, PAGE_READWRITE);
-		lockArena(fileHndl, path);
-
-		if (!ReadFile(fileHndl, segZero, sizeof(DbArena), &amt, NULL)) {
-			fprintf (stderr, "Unable to read %lld bytes from %s, error = %d", sizeof(DbArena), path, errno);
-			VirtualFree(segZero, 0, MEM_RELEASE);
-			unlockArena(fileHndl, path);
-			CloseHandle(fileHndl);
-			db_free(map);
-			return NULL;
-		}
-#else
-		fileHndl = openPath (map->path, 0);
-
-		if (fileHndl == -1) {
-			db_free(map);
-			return NULL;
-		}
-
-		// read first part of segment zero if it exists
-
-		lockArena(fileHndl, path);
-		segZero = valloc(sizeof(DbArena));
-
-		if ((amt = pread(fileHndl, segZero, sizeof(DbArena), 0))) {
-			if (amt < sizeof(DbArena)) {
-				fprintf (stderr, "Unable to read %d bytes from %s, error = %d", (int)sizeof(DbArena), path, errno);
-				unlockArena(fileHndl, path);
-				free(segZero);
-				close(fileHndl);
-				db_free(map);
-				return NULL;
-			}
-		}
-#endif
-	} else
-#ifdef _WIN32
-		fileHndl = INVALID_HANDLE_VALUE;
-#else
-		fileHndl = -1;
-#endif
-
-	map->hndl[0] = fileHndl;
-
-	//  if segment zero exists, map the arena
-
-	if (amt) {
-		unlockArena(fileHndl, path);
-		mapZero(map, segZero->segs->size);
-#ifdef _WIN32
-		VirtualFree(segZero, 0, MEM_RELEASE);
-		CloseHandle(fileHndl);
-#else
-		free(segZero);
-#endif
-		// wait for initialization to finish
-
-		waitNonZero(map->arena->type);
-		return makeHandle(map);
-	}
-
-	if (segZero) {
-#ifdef _WIN32
-		VirtualFree(segZero, 0, MEM_RELEASE);
-#else
-		free(segZero);
-#endif
-	}
-
-	segOffset = sizeof(DbArena) + baseSize;
+	segOffset = sizeof(DbArena) + arenaDef->baseSize;
 	segOffset += 7;
 	segOffset &= -8;
 
@@ -131,12 +205,20 @@ DbMap *map;
 	initSize += 65535;
 	initSize &= -65536;
 
+#ifdef _WIN32
+	_BitScanReverse((unsigned long *)&bits, initSize - 1);
+	bits++;
+#else
+	bits = 32 - (__builtin_clz (initSize - 1));
+#endif
 	//  create initial segment on unix, windows will automatically do it
 
+	initSize = 1ULL << bits;
+
 #ifndef _WIN32
-	if (onDisk && ftruncate(fileHndl, initSize)) {
-		fprintf (stderr, "Unable to initialize file %s, error = %d", path, errno);
-		close(fileHndl);
+	if (ftruncate(map->hndl, initSize)) {
+		fprintf (stderr, "Unable to initialize file %s, error = %d", map->path + map->pathOff, errno);
+		close(map->hndl);
 		db_free(map);
 		return NULL;
 	}
@@ -146,17 +228,13 @@ DbMap *map;
 
 	mapZero(map, initSize);
 	map->arena->nextObject.offset = segOffset >> 3;
+	map->arena->objSize = arenaDef->objSize;
 	map->arena->segs->size = initSize;
-	map->arena->objSize = objSize;
 	map->arena->delTs = 1;
+	map->arenaDef = arenaDef;
 	map->created = true;
 
-	if (onDisk)
-		unlockArena(fileHndl, path);
-#ifdef _WIN32
-	CloseHandle(fileHndl);
-#endif
-	return makeHandle(map);
+	return map;
 }
 
 //  initialize arena segment zero
@@ -173,26 +251,29 @@ void mapZero(DbMap *map, uint64_t size) {
 //  return FALSE if out of memory
 
 bool newSeg(DbMap *map, uint32_t minSize) {
-uint64_t off = map->arena->segs[map->arena->currSeg].off;
 uint64_t size = map->arena->segs[map->arena->currSeg].size;
+uint64_t off = map->arena->segs[map->arena->currSeg].off;
 uint32_t nextSeg = map->arena->currSeg + 1;
 
 	minSize += sizeof(DbSeg);
+	off += size;
 
 	// bootstrapping new inMem arena?
+	// or allocating segment one?
 
-	if (size)
-		off += size;
-	else
-		nextSeg = 0;
-
-	if (size < MIN_segsize / 2)
+	if (!size) {
 		size = MIN_segsize / 2;
+		nextSeg = 0;
+	} else if (!map->arena->currSeg)
+		size >>= 1;
 
 	// double the current size up to 32GB
 
 	do size <<= 1;
 	while (size < minSize);
+
+	if (size < MIN_segsize)
+		size = MIN_segsize;
 
 	if (size > 32ULL * 1024 * 1024 * 1024)
 		size = 32ULL * 1024 * 1024 * 1024;
@@ -204,9 +285,9 @@ uint32_t nextSeg = map->arena->currSeg + 1;
 	//  extend the disk file, windows does this automatically
 
 #ifndef _WIN32
-	if (map->hndl[0] >= 0)
-	  if (ftruncate(map->hndl[0], off + size)) {
-		fprintf (stderr, "Unable to initialize file %s, error = %d", map->path, errno);
+	if (map->hndl >= 0)
+	  if (ftruncate(map->hndl, (off + size))) {
+		fprintf (stderr, "Unable to initialize file %s, error = %d", map->path + map->pathOff, errno);
 		return false;
 	  }
 #endif
@@ -225,8 +306,8 @@ uint32_t nextSeg = map->arena->currSeg + 1;
 //  allocate an object from non-wait frame list
 //  return 0 if out of memory.
 
-uint64_t allocObj( DbMap* map, DbAddr *free, DbAddr *tail, int type, uint32_t size, bool zeroit ) {
-uint32_t bits = 3;
+uint64_t allocObj( DbMap* map, DbAddr *free, int type, uint32_t size, bool zeroit ) {
+uint32_t bits;
 DbAddr slot;
 
 	size += 7;
@@ -240,14 +321,12 @@ DbAddr slot;
 	if (type < 0) {
 		type = bits;
 		free += type;
-		if (tail)
-			tail += type;
 	}
 
 	lockLatch(free->latch);
 
 	while (!(slot.bits = getNodeFromFrame(map, free))) {
-	  if (!getNodeWait(map, free, tail))
+	  if (!getNodeWait(map, free, NULL))
 		if (!initObjFrame(map, free, type, size)) {
 			unlockLatch(free->latch);
 			return 0;
@@ -271,6 +350,14 @@ DbAddr slot;
 	return slot.bits;
 }
 
+void freeBlk(DbMap *map, DbAddr *addr) {
+	addSlotToFrame(map, &map->arena->freeBlk[addr->type], addr->bits);
+}
+
+uint64_t allocBlk(DbMap *map, uint32_t size, bool zeroit) {
+	return allocObj(map, map->arena->freeBlk, -1, size, zeroit);
+}
+
 void mapAll (DbMap *map) {
 	lockLatch(map->mapMutex);
 
@@ -278,14 +365,14 @@ void mapAll (DbMap *map) {
 		if (mapSeg (map, map->maxSeg + 1))
 			map->maxSeg++;
 		else
-			fprintf(stderr, "Unable to map segment %d on map %s\n", map->maxSeg + 1, map->path), exit(1);
+			fprintf(stderr, "Unable to map segment %d on map %s\n", map->maxSeg + 1, map->path + map->pathOff), exit(1);
 
 	unlockLatch(map->mapMutex);
 }
 
 void* getObj(DbMap *map, DbAddr slot) {
 	if (!slot.addr) {
-		fprintf (stderr, "Invalid zero DbAddr: %s\n", map->path);
+		fprintf (stderr, "Invalid zero DbAddr: %s\n", map->path + map->pathOff);
 		exit(1);
 	}
 
@@ -350,7 +437,7 @@ uint64_t off = map->arena->segs[currSeg].off;
 
 void *fetchObjSlot (DbMap *map, ObjId objId) {
 	if (!objId.index) {
-		fprintf (stderr, "Invalid zero document index: %s\n", map->path);
+		fprintf (stderr, "Invalid zero document index: %s\n", map->path + map->pathOff);
 		exit(1);
 	}
 

@@ -17,7 +17,7 @@ typedef struct {
 
 typedef struct {
 	uint64_t objTs;		// object timestamp on current API
-	DbAddr freeList;	// node free list by type
+	FreeList list[MaxObjType];
 } HandleArray;
 
 //	Local Handle for an arena
@@ -26,7 +26,6 @@ typedef struct {
 #define HANDLE_incr	0x2
 
 typedef struct {
-	FreeList *freeList;	// pointer to object free lists
 	HandleArray *array;	// pointer to arena handle entry
 	uint32_t status[1];	// active entry count/dead status
 	uint16_t arenaIdx;	// arena handle table entry index
@@ -39,7 +38,12 @@ typedef struct {
 	uint64_t version;	// version of the object
 	DbAddr previous;	// previous version of object
 	ObjId objId;		// ObjId of the object list
+	DbAddr txn;			// optional database txn
 	uint32_t size;		// object size
+} Document;
+
+typedef struct {
+	uint32_t size;
 } Object;
 
 uint64_t get64(uint8_t *from);
@@ -50,5 +54,7 @@ Handle *makeHandle(DbMap *map);
 bool bindHandle(Handle *hndl);
 void releaseHandle(Handle *hndl);
 
-void *arrayElement(DbMap *map, DbAddr *array, uint32_t idx, size_t size);
-uint32_t arrayAlloc(DbMap *map, DbAddr *array, size_t size);
+void *arrayElement(DbMap *map, DbAddr *array, uint16_t idx, size_t size);
+void *arrayAssign(DbMap *map, DbAddr *array, uint16_t idx, size_t size);
+void arrayExpand(DbMap *map, DbAddr *array, size_t size, uint16_t idx);
+uint16_t arrayAlloc(DbMap *map, DbAddr *array, size_t size);

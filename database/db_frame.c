@@ -14,8 +14,6 @@ uint32_t dup = FrameSlots;
 Frame *frame;
 DbAddr slot;
 	
-	slot.bits = type;
-
 	if (size * dup > 4096 * 4096)
 		dup >>= 5;
 
@@ -39,9 +37,11 @@ DbAddr slot;
 	frame->next.bits = 0;
 	frame->prev.bits = 0;
 
+	slot.type = type;
+
 	while (dup--) {
 		frame->slots[dup].bits = slot.bits;
-		slot.bits += size >> 3;
+		slot.offset += size >> 3;
 	}
 
 	return true;

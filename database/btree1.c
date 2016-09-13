@@ -4,17 +4,6 @@
 #include "db_map.h"
 #include "btree1.h"
 
-#define pagebits 13		// btree interior page size
-#define leafxtra 0		// btree leaf extra bits
-
-#if (pagebits > Btree_maxbits)
-#error btree interior pages too large
-#endif
-
-#if (pagebits + leafxtra > Btree_maxbits)
-#error btree leaf pages too large
-#endif
-
 //	create an empty page
 
 uint64_t btreeNewPage (Handle *hndl, uint8_t lvl) {
@@ -33,7 +22,7 @@ DbAddr addr;
 		size <<= btree->leafXtra;
 	}
 
-	if ((addr.bits = allocNode(hndl->map, hndl->freeList, type, size, true)))
+	if ((addr.bits = allocNode(hndl->map, hndl->array->list, type, size, true)))
 		page = getObj(hndl->map, addr);
 	else
 		return 0;
@@ -50,10 +39,6 @@ BtreeIndex *btree = btreeIndex(hndl->map);
 BtreePage *page;
 BtreeSlot *slot;
 uint8_t *buff;
-
-	btree->pageSize = 1 << pagebits;
-	btree->pageBits = pagebits;
-	btree->leafXtra = leafxtra;
 
 	//	initial btree root & leaf pages
 

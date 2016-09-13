@@ -5,8 +5,10 @@
 
 extern DbMap memMap[1];
 
+//	return a handle for an arena
+
 Handle *makeHandle(DbMap *map) {
-uint32_t localIdx;
+uint16_t localIdx;
 Handle *hndl;
 
 	localIdx = arrayAlloc(memMap, map->hndlArray, sizeof(Handle));
@@ -18,32 +20,40 @@ Handle *hndl;
 
 	hndl->array = arrayElement(map, map->arena->handleArray, hndl->arenaIdx, sizeof(HandleArray));
 
-	// allocate freeList array
-
-	if (!hndl->array->freeList.bits)
-		hndl->array->freeList.bits = allocObj(map, map->arena->freeBlk, NULL, -1, sizeof(FreeList) * MaxObjType, true);
-
-	hndl->freeList = getObj(map, hndl->array->freeList);
 	return hndl;
 }
 
-void *arrayElement(DbMap *map, DbAddr *array, uint32_t idx, size_t size) {
+void *arrayElement(DbMap *map, DbAddr *array, uint16_t idx, size_t size) {
 uint8_t *base = getObj(map, *array);
 
 	base += array->nslot * sizeof(uint64_t);
 	return (void *)(base + size * idx);
 }
 
+//	assign an array element
+//	return payload address
+
+void *arrayAssign(DbMap *map, DbAddr *array, uint16_t idx, size_t size) {
+uint8_t *base;
+
+	if (array->nslot * 64 <= idx)
+		arrayExpand(map, array, size, idx);
+
+	base = getObj(map, *array);
+	base += array->nslot * sizeof(uint64_t);
+	return (void *)(base + size * idx);
+}
+
 //	allocate an array element
 
-uint32_t arrayAlloc(DbMap *map, DbAddr *array, size_t size) {
+uint16_t arrayAlloc(DbMap *map, DbAddr *array, size_t size) {
 uint64_t *inUse, *newArray;
 unsigned long bits[1];
-DbAddr next[1];
 int idx, max;
 
-	lockLatch(array->latch);
+  lockLatch(array->latch);
 
+  while (true) {
 	if (array->nslot)
 		inUse = getObj(map, *array);
 
@@ -64,14 +74,28 @@ int idx, max;
 	  return *bits + idx * 64;
 	}
 
-	//	increase array size
+	// table is full
 
-	if (array->nslot == 255)
-		fprintf(stderr, "Array overflow\n"), exit(1);
+	arrayExpand(map, array, size, idx * 64);
+  }
+}
+
+//	increase array size
+
+void arrayExpand(DbMap *map, DbAddr *array, size_t size, uint16_t max) {
+uint64_t *newArray, *inUse;
+DbAddr next[1];
+
+	if (array->nslot)
+		inUse = getObj(map, *array);
 
 	// calculate number of slots
 
-	if ((max = array->nslot))
+	max += 63;
+	max &= -8;
+	max /= 64;
+
+	if (max)
 		max += max / 2;
 	else
 		max = 1;
@@ -79,7 +103,10 @@ int idx, max;
 	if (max > 255)
 		max = 255;
 
-	next->bits = allocObj(map, map->arena->freeBlk, NULL, -1, max * sizeof(uint64_t) + (max * 64) * size, true);
+	if (max <= array->nslot)
+		fprintf(stderr, "Array overflow: %s\n", map->path), exit(1);
+
+	next->bits = allocBlk(map, max * sizeof(uint64_t) + (max * 64) * size, true);
 
 	next->nslot = max;
 
@@ -89,20 +116,20 @@ int idx, max;
 	memcpy (newArray, inUse, array->nslot);
 	memcpy (newArray + next->nslot, inUse + array->nslot, array->nslot * size);
 
-	// assign first new entry
-
-	idx = array->nslot * 64;
-	newArray[array->nslot] = 1;
-
 	// release old array
 
 	if (array->addr)
-		addSlotToFrame(map, &map->arena->freeBlk[array->type], array->bits);
+		freeBlk(map, array);
 
-	// point to new array, release lock in the process
+	// point to new array, keeping lock in the process
 
+	next->mutex = 1;
 	array->bits = next->bits;
-	return idx;
+}
+
+//	add entry to redblack tree
+
+void arraySort (DbMap *map, DbAddr *array, char *name, int idx) {
 }
 
 //  check if all handles are dead/closed
