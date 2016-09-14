@@ -106,7 +106,7 @@ DbAddr addr;
 	else
 		return ERROR_arenadropped;
 
-	objId.bits = allocObjId(docStore->map, &docStore->array->list[ObjIdType]);
+	objId.bits = allocObjId(docStore->map, docStore->array->list);
 
 	memset (doc, 0, sizeof(Document));
 	doc->objId.bits = objId.bits;

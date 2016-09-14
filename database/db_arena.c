@@ -227,7 +227,7 @@ uint32_t bits;
 	//  initialize new arena segment zero
 
 	mapZero(map, initSize);
-	map->arena->nextObject.offset = segOffset >> 3;
+	map->arena->segs[map->arena->currSeg].nextObject.offset = segOffset >> 3;
 	map->arena->objSize = arenaDef->objSize;
 	map->arena->segs->size = initSize;
 	map->arena->segBits = bits;
@@ -288,7 +288,9 @@ uint64_t nextSize;
 
 	map->arena->segs[nextSeg].off = off;
 	map->arena->segs[nextSeg].size = nextSize;
-	map->arena->segs[nextSeg].nextObj.segment = nextSeg;
+	map->arena->segs[nextSeg].nextId.segment = nextSeg;
+	map->arena->segs[nextSeg].nextObject.segment = nextSeg;
+	map->arena->segs[nextSeg].nextObject.offset = nextSeg ? 0 : 1;
 
 	//  extend the disk file, windows does this automatically
 
@@ -303,18 +305,15 @@ uint64_t nextSize;
 	if (!mapSeg(map, nextSeg))
 		return false;
 
-	map->maxSeg = nextSeg;
-
-	map->arena->nextObject.offset = nextSeg ? 0 : 1;
-	map->arena->nextObject.segment = nextSeg;
 	map->arena->currSeg = nextSeg;
+	map->maxSeg = nextSeg;
 	return true;
 }
 
 //  allocate an object from non-wait frame list
 //  return 0 if out of memory.
 
-uint64_t allocObj( DbMap* map, DbAddr *free, int type, uint32_t size, bool zeroit ) {
+uint64_t allocObj(DbMap* map, DbAddr *free, int type, uint32_t size, bool zeroit ) {
 uint32_t bits;
 DbAddr slot;
 
@@ -348,7 +347,7 @@ DbAddr slot;
 
 	{
 		uint64_t max = map->arena->segs[slot.segment].size
-		  - map->arena->segs[slot.segment].nextObj.index * sizeof(DbAddr);
+		  - map->arena->segs[slot.segment].nextId.index * sizeof(DbAddr);
 
 		if (slot.offset * 8ULL + size > max)
 			fprintf(stderr, "allocObj segment overrun\n"), exit(1);
@@ -410,7 +409,7 @@ uint64_t max, addr;
 	lockLatch(map->arena->mutex);
 
 	max = map->arena->segs[map->arena->currSeg].size
-		  - map->arena->segs[map->arena->currSeg].nextObj.index * map->arena->objSize;
+		  - map->arena->segs[map->arena->objSeg].nextId.index * map->arena->objSize;
 
 	size += 7;
 	size &= -8;
@@ -418,15 +417,15 @@ uint64_t max, addr;
 	// see if existing segment has space
 	// otherwise allocate a new segment.
 
-	if (map->arena->nextObject.offset * 8ULL + size > max) {
+	if (map->arena->segs[map->arena->currSeg].nextObject.offset * 8ULL + size > max) {
 		if (!newSeg(map, size)) {
 			unlockLatch (map->arena->mutex);
 			return 0;
 		}
 	}
 
-	addr = map->arena->nextObject.bits;
-	map->arena->nextObject.offset += size >> 3;
+	addr = map->arena->segs[map->arena->currSeg].nextObject.bits;
+	map->arena->segs[map->arena->currSeg].nextObject.offset += size >> 3;
 	unlockLatch(map->arena->mutex);
 	return addr;
 }
@@ -492,19 +491,19 @@ DbAddr slot;
 uint64_t allocObjId(DbMap *map, FreeList *list) {
 ObjId objId;
 
-	lockLatch(list->free->latch);
+	lockLatch(list[ObjIdType].free->latch);
 
 	// see if there is a free object in the free queue
 	// otherwise create a new frame of new objects
 
-	while (!(objId.bits = getNodeFromFrame(map, list->free))) {
-		if (!getNodeWait(map, list->free, list->tail))
-			if (!initObjIdFrame(map, list->free)) {
-				unlockLatch(list->free->latch);
+	while (!(objId.bits = getNodeFromFrame(map, list[ObjIdType].free))) {
+		if (!getNodeWait(map, list[ObjIdType].free, list[ObjIdType].tail))
+			if (!initObjIdFrame(map, list[ObjIdType].free)) {
+				unlockLatch(list[ObjIdType].free->latch);
 				return 0;
 			}
 	}
 
-	unlockLatch(list->free->latch);
+	unlockLatch(list[ObjIdType].free->latch);
 	return objId.bits;
 }

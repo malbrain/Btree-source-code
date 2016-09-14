@@ -275,24 +275,37 @@ Frame *frame;
 
 	lockLatch(map->arena->mutex);
 
-	max = map->arena->segs[map->arena->currSeg].size -
-		map->arena->segs[map->arena->currSeg].nextObj.index * map->arena->objSize;
-	max -= dup * map->arena->objSize;
+	while (true) {
+	  max = map->arena->segs[map->arena->objSeg].size -
+		map->arena->segs[map->arena->objSeg].nextId.index * map->arena->objSize;
+	  max -= dup * map->arena->objSize;
 
-	if (map->arena->nextObject.offset * 8ULL > max )
-		if (!newSeg(map, dup * map->arena->objSize))
-			return false;
+	  if (map->arena->segs[map->arena->objSeg].nextObject.offset * 8ULL < max )
+		break;
+
+	  if (map->arena->objSeg < map->arena->currSeg) {
+		map->arena->objSeg++;
+		continue;
+	  }
+
+	  if (!newSeg(map, dup * map->arena->objSize))
+	  	return false;
+
+	  map->arena->objSeg = map->arena->currSeg;
+	  break;
+	}
 
 	// allocate a batch of ObjIds
 
-	map->arena->segs[map->arena->currSeg].nextObj.index += dup;
-	addr = map->arena->segs[map->arena->currSeg].nextObj.bits;
-
+	map->arena->segs[map->arena->objSeg].nextId.index += dup;
+	addr = map->arena->segs[map->arena->objSeg].nextId.bits;
 	unlockLatch(map->arena->mutex);
 
 	if (!free->addr)
-		if (!(free->addr = allocFrame(map)))
-		   return false;
+	  if (!(free->addr = allocFrame(map))) {
+		unlockLatch(map->arena->mutex);
+		return false;
+	  }
 
 	free->type = FrameType;
 	free->nslot = FrameSlots;

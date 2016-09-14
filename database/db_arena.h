@@ -44,7 +44,8 @@ typedef struct {
 typedef struct {
 	uint64_t off;		// file offset of segment
 	uint64_t size;		// size of the segment
-	ObjId nextObj;		// highest object ID in use
+	DbAddr nextObject;	// next Object address
+	ObjId nextId;		// highest object ID in use
 } DbSeg;
 
 //  Child arena specifications
@@ -74,11 +75,11 @@ struct DbArena_ {
 	DbAddr freeBlk[MAX_blk];	// free blocks in frames
 	DbAddr handleArray[1];		// arena handle array
 	DbAddr freeFrame[1];		// free frames in frames
-	DbAddr nextObject;			// next Object address
 	uint64_t objCount;			// overall number of objects
 	uint64_t objSpace;			// overall size of objects
 	uint32_t objSize;			// size of object array element
 	uint16_t currSeg;			// index of highest segment
+	uint16_t objSeg;			// current segment index for ObjIds
 	uint8_t segBits;			// segment size in bits
 	char mutex[1];				// arena allocation lock/drop flag
 	char type[1];				// arena type
