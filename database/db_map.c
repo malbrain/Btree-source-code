@@ -223,6 +223,64 @@ void kill_slot(volatile char *latch) {
 #endif
 }
 
+#ifdef _WIN32
+void lockArena (DbMap *map) {
+OVERLAPPED ovl[1];
+
+	memset (ovl, 0, sizeof(ovl));
+	ovl->OffsetHigh = 0x80000000;
+
+	if (LockFileEx (map->hndl, LOCKFILE_EXCLUSIVE_LOCK, 0, sizeof(DbArena), 0, ovl))
+		return;
+
+	fprintf (stderr, "Unable to lock %s, error = %d", map->path, (int)GetLastError());
+	exit(1);
+}
+#else
+void lockArena (DbMap *map) {
+struct flock lock[1];
+
+	memset (lock, 0, sizeof(lock));
+	lock->l_len = sizeof(DbArena);
+	lock->l_type = F_WRLCK;
+
+	if (!fcntl(map->hndl, F_SETLKW, lock))
+		return;
+
+	fprintf (stderr, "Unable to lock %s, error = %d", map->path, errno);
+	exit(1);
+}
+#endif
+
+#ifdef _WIN32
+void unlockArena (DbMap *map) {
+OVERLAPPED ovl[1];
+
+	memset (ovl, 0, sizeof(ovl));
+	ovl->OffsetHigh = 0x80000000;
+
+	if (UnlockFileEx (map->hndl, 0, sizeof(DbArena), 0, ovl))
+		return;
+
+	fprintf (stderr, "Unable to unlock %s, error = %d", map->path, (int)GetLastError());
+	exit(1);
+}
+#else
+void unlockArena (DbMap *map) {
+struct flock lock[1];
+
+	memset (lock, 0, sizeof(lock));
+	lock->l_len = sizeof(DbArena);
+	lock->l_type = F_UNLCK;
+
+	if (!fcntl(map->hndl, F_SETLKW, lock))
+		return;
+
+	fprintf (stderr, "Unable to unlock %s, error = %d", map->path, errno);
+	exit(1);
+}
+#endif
+
 bool fileExists(char *path) {
 #ifdef _WIN32
 	int attr = GetFileAttributes(path);

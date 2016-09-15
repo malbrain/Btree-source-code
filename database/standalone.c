@@ -68,12 +68,48 @@ struct timeval tv[1];
 }
 #endif
 
+//  Interface function to create a document key
+//	from a document and a key specifier
+
+enum KeyType {
+	pennySort,		// 10 char keys
+	wholeRec		// whole record key
+};
+
+typedef struct {
+	enum KeyType type;
+} KeySpec;
+
+uint16_t keyGenerator (uint8_t *key, void *obj, uint16_t objSize, void *spec, uint16_t specSize) {
+KeySpec *keySpec = (KeySpec *)spec;
+uint16_t keyLen = 0;
+
+	switch (keySpec->type) {
+	case pennySort:
+#ifdef DEBUG
+		if(objSize < 10)
+			return fprintf(stderr, "pennysort KeyGenerator record too short: %d\n", objSize), 0;
+#endif
+		memcpy(key, obj, 10);
+		return 10;
+
+	case wholeRec:
+		memcpy(key, obj, objSize);
+		return objSize;
+	}
+	
+#ifdef DEBUG
+	fprintf(stderr, "KeyGenerator invalid KeyType: %d\n", keySpec->type);
+#endif
+	return 0;
+}
+
 typedef struct {
 	char idx;
 	char *type;
 	char *infile;
-	void *docStore;
-	void *index;
+	void *database;
+	int bits, xtra, onDisk;
 	int num;
 } ThreadArg;
 
@@ -90,14 +126,14 @@ int line = 0, found = 0, cnt = 0, idx;
 int ch, len = 0, slot, type = 0;
 unsigned char key[4096];
 ThreadArg *args = arg;
+KeySpec keySpec[1];
 uint64_t objId;
 void *docStore;
 void *index;
 int stat;
 FILE *in;
 
-	docStore = cloneHandle(args->docStore);
-	index = cloneHandle(args->index);
+	docStore = openDocStore(args->database, "documents", strlen("documents"), args->onDisk);
 
 	if( args->idx < strlen (args->type) )
 		ch = args->type[args->idx];
@@ -118,6 +154,10 @@ FILE *in;
 		else
 		  fprintf(stderr, "started pennysort insert for %s\n", args->infile);
 
+		keySpec->type = pennySort;
+
+		index = createIndex(docStore, "index", strlen("index"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
+
 		if( in = fopen (args->infile, "rb") )
 		  while( ch = getc(in), ch != EOF )
 			if( ch == '\n' )
@@ -130,12 +170,6 @@ FILE *in;
 
 			  if ((stat = addDocument (docStore, key + 10, len - 10, &objId, 0)))
 				  fprintf(stderr, "Add Error %d Line: %d\n", stat, line), exit(0);
-			  len = 10;
-			  len += addObjId(key + len, objId);
-
-			  if ((stat = insertKey(index, key, len)))
-				  fprintf(stderr, "Key Error %d Line: %d\n", stat, line), exit(0);
-
 			  len = 0;
 			  continue;
 			}
@@ -148,6 +182,10 @@ FILE *in;
 
 	case 'w':
 		fprintf(stderr, "started indexing for %s\n", args->infile);
+
+		keySpec->type = wholeRec;
+
+		index = createIndex(docStore, "index", strlen("index"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
 
 		if( in = fopen (args->infile, "r") )
 		  while( ch = getc(in), ch != EOF )
@@ -334,16 +372,16 @@ void *index;
 	args = malloc (cnt * sizeof(ThreadArg));
 
 	database = openDatabase(argv[1], strlen(argv[1]), onDisk);
-	docStore = openDocStore(database, "documents", strlen("documents"), onDisk);
-	index = createIndex(docStore, "index", strlen("index"), bits, xtra, onDisk);
 
 	//	fire off threads
 
 	for( idx = 0; idx < cnt; idx++ ) {
+		args[idx].database = cloneHandle(database);
 		args[idx].infile = argv[idx + 6];
+		args[idx].onDisk = onDisk;
 		args[idx].type = argv[2];
-		args[idx].docStore = docStore;
-		args[idx].index = index;
+		args[idx].bits = bits;
+		args[idx].xtra = xtra;
 		args[idx].num = num;
 		args[idx].idx = idx;
 #ifdef unix

@@ -16,7 +16,7 @@ Iterator *it = db_malloc(sizeof(Iterator), true);
 	if (fromMin) {
 		it->objId.bits = 0;
 	} else {
-		it->objId = hndl->map->arena->segs[hndl->map->arena->currSeg].nextId;
+		it->objId = hndl->map->arena->segs[hndl->map->arena->objSeg].nextId;
 		it->objId.index++;
 	}
 
@@ -34,12 +34,12 @@ void destroyIterator(Iterator *it) {
 bool incrObjId(Iterator *it) {
 ObjId start = it->objId;
 
-	while (it->objId.segment <= it->objMap->arena->currSeg) {
-		if (++it->objId.index <= it->objMap->arena->segs[it->objId.segment].nextId.index)
+	while (it->objId.seg <= it->objMap->arena->objSeg) {
+		if (++it->objId.index <= it->objMap->arena->segs[it->objId.seg].nextId.index)
 			return true;
 
 		it->objId.index = 0;
-		it->objId.segment++;
+		it->objId.seg++;
 	}
 
 	it->objId = start;
@@ -56,11 +56,11 @@ ObjId start = it->objId;
 	while (it->objId.index) {
 		if (--it->objId.index)
 			return true;
-		if (!it->objId.segment)
+		if (!it->objId.seg)
 			break;
 
-		it->objId.segment--;
-		it->objId.index = it->objMap->arena->segs[it->objId.segment].nextId.index + 1;
+		it->objId.seg--;
+		it->objId.index = it->objMap->arena->segs[it->objId.seg].nextId.index + 1;
 	}
 
 	it->objId = start;

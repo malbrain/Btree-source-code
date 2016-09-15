@@ -25,13 +25,13 @@ void mapAll (DbMap *map);
 //	call with parent arenaNames r/b tree locked
 
 DbMap *arenaMap(DbMap *parent, char *name, uint32_t nameLen, PathStk *path) {
-DbMap **catalog, *database = parent->database;
+DbMap **catalog, *db = parent->db;
 ArenaDef *arenaDef;
 RedBlack *entry;
 
-	if ((entry = rbFind(database, parent->arenaDef->arenaNames, name, nameLen, path))) {
+	if ((entry = rbFind(db, parent->arenaDef->arenaNames, name, nameLen, path))) {
 		arenaDef = rbPayload(entry);
-		catalog = arrayElement(database, parent->arenaMaps, arenaDef->idx, sizeof(*catalog));
+		catalog = arrayElement(db, parent->arenaMaps, arenaDef->idx, sizeof(*catalog));
 		//	see if our arena has already been opened in our process
 
 		if (!*catalog)
@@ -45,7 +45,7 @@ RedBlack *entry;
 //  open/create arena
 
 DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
-DbMap *map, *database = parent->database;
+DbMap *map, *db = parent->db;
 ArenaDef *arenaDef;
 DbMap **catalog;
 PathStk path[1];
@@ -62,14 +62,14 @@ RedBlack *entry;
 
 	// otherwise, create new database ArenaDef entry
 
-	if ((entry = rbNew(database, name, nameLen, sizeof(ArenaDef))))
+	if ((entry = rbNew(db, name, nameLen, sizeof(ArenaDef))))
 		arenaDef = rbPayload(entry);
 	else {
 		unlockLatch(parent->arenaDef->arenaNames->latch);
 		return NULL; // out of memory
 	}
 
-	arenaDef->idx = arrayAlloc(parent, parent->arenaDef->arenaHndlIdx, 0);
+	arenaDef->idx = arrayAlloc(db, parent->arenaDef->arenaHndlIdx, 0);
 	arenaDef->id = atomicAdd64(&parent->arenaDef->arenaId, 1);
 	arenaDef->node.bits = entry->addr.bits;
 	arenaDef->onDisk = onDisk;
@@ -107,9 +107,9 @@ int32_t amt = 0;
 	map->pathOff = getPath(map->path, MAX_path, name, nameLen, parent);
 
 	if ((map->parent = parent))
-		map->database = parent->database;
+		map->db = parent->db;
 	else
-		map->database = map;
+		map->db = map;
 
 	if (!(map->onDisk = arenaDef->onDisk)) {
 #ifdef _WIN32
@@ -131,6 +131,8 @@ int32_t amt = 0;
 		return NULL;
 	}
 
+	lockArena(map);
+
 	segZero = VirtualAlloc(NULL, sizeof(DbArena), MEM_COMMIT, PAGE_READWRITE);
 
 	if (!ReadFile(map->hndl, segZero, sizeof(DbArena), &amt, NULL)) {
@@ -148,6 +150,8 @@ int32_t amt = 0;
 		return NULL;
 	}
 
+	lockArena(map);
+
 	// read first part of segment zero if it exists
 
 	segZero = valloc(sizeof(DbArena));
@@ -164,6 +168,7 @@ int32_t amt = 0;
 #endif
 	if (amt < sizeof(DbArena)) {
 		initMap(map, arenaDef);
+		unlockArena(map);
 		return map;
 	}
 
@@ -177,6 +182,7 @@ int32_t amt = 0;
 #endif
 
 	map->arenaDef = arenaDef;
+	unlockArena(map);
 
 	// wait for initialization to finish
 
@@ -281,14 +287,14 @@ uint64_t nextSize;
 		nextSize = 1ULL << MAX_segbits;
 
 #ifdef _WIN32
-	assert(__popcnt(off + nextSize) == 1);
+	assert(__popcnt64(off + nextSize) == 1);
 #else
 	assert(__builtin_popcountll(off + nextSize) == 1);
 #endif
 
 	map->arena->segs[nextSeg].off = off;
 	map->arena->segs[nextSeg].size = nextSize;
-	map->arena->segs[nextSeg].nextId.segment = nextSeg;
+	map->arena->segs[nextSeg].nextId.seg = nextSeg;
 	map->arena->segs[nextSeg].nextObject.segment = nextSeg;
 	map->arena->segs[nextSeg].nextObject.offset = nextSeg ? 0 : 1;
 
@@ -448,7 +454,7 @@ void *fetchObjSlot (DbMap *map, ObjId objId) {
 		exit(1);
 	}
 
-	return map->base[objId.segment] + map->arena->segs[objId.segment].size - objId.index * map->arena->objSize;
+	return map->base[objId.seg] + map->arena->segs[objId.seg].size - objId.index * map->arena->objSize;
 }
 
 uint64_t allocNode(DbMap *map, FreeList *list, int type, uint32_t size, bool zeroit) {
@@ -504,6 +510,7 @@ ObjId objId;
 			}
 	}
 
+	objId.idx = map->arenaDef->idx;
 	unlockLatch(list[ObjIdType].free->latch);
 	return objId.bits;
 }

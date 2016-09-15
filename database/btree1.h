@@ -1,5 +1,6 @@
+#pragma once
 
-#define Btree_maxkey		4096				// maximum key size in bytes
+#define Btree_maxkey		4096
 #define Btree_maxbits		29					// maximum page size in bits
 #define Btree_minbits		9					// minimum page size in bits
 #define Btree_minpage		(1 << Btree_minbits)	// minimum page size
@@ -34,6 +35,7 @@ typedef struct {
 	uint32_t pageBits;
 	uint32_t leafXtra;
 	uint64_t numEntries[1];	// number of keys in btree
+	DbAddr keySpec;
 	DbAddr root;
 	DbAddr leaf;
 } BtreeIndex;

@@ -22,22 +22,13 @@ enum MapType {
 	BtreeIndexType
 };
 
-//	Database transactions: ObjId
-//	entries in the database arena
+//	Database transactions: included ObjId frames
 
 typedef struct {
-	DbAddr txnFrame[1];	// head of frames containing txn steps
+	DbAddr txnFrame[1];	// frames containing Object Ids
 	uint64_t timestamp;	// txn committed timestamp
+	ObjId txnId;		// txn ID
 } Txn;
-
-//	Transaction steps
-
-typedef struct {
-	ObjId objId;		// ObjId for the docStore
-	uint16_t objIdx;	// arena entry idx for the docStore
-	uint16_t subIdx;	// docStore arena entry idx for the index
-	uint32_t size;		// transaction step object size
-} TxnStep;
 
 //  on disk arena segment
 
@@ -52,19 +43,19 @@ typedef struct {
 
 typedef struct ArenaDef_ {
 	DbAddr node;				// database redblack node
-	uint64_t id;				// arena id
-	uint64_t arenaId;			// highest arenaId issued
+	uint64_t id;				// our arena id in parent
+	uint64_t arenaId;			// highest child arenaId issued
 	uint64_t initSize;			// initial arena size
 	uint32_t localSize;			// extra space after DbMap
 	uint32_t baseSize;			// extra space after DbArena
 	uint32_t objSize;			// size of ObjectId array slot
-	uint16_t cmd;				// 0 = add, 1 = delete
 	uint16_t idx;				// arena handle array index
 	uint8_t onDisk;				// arena onDisk/inMemory
+	uint8_t cmd;				// 0 = add, 1 = delete
 	DbAddr next, prev;			// linked list
-	DbAddr arenaHndlIdx[1];		// allocate local arena handles
-	DbAddr arenaIdList[1];		// head of arena id list
-	DbAddr arenaNames[1];		// arena name red/black tree
+	DbAddr arenaHndlIdx[1];		// allocate local child arena handles
+	DbAddr arenaIdList[1];		// head of child arena id list
+	DbAddr arenaNames[1];		// child arena name red/black tree
 } ArenaDef;
 
 //  on disk/mmap arena seg zero
@@ -73,7 +64,7 @@ struct DbArena_ {
 	DbSeg segs[MAX_segs]; 		// segment meta-data
 	uint64_t lowTs, delTs;		// low hndl ts, Incr on delete
 	DbAddr freeBlk[MAX_blk];	// free blocks in frames
-	DbAddr handleArray[1];		// arena handle array
+	DbAddr handleArray[1];		// handle array for our arena
 	DbAddr freeFrame[1];		// free frames in frames
 	uint64_t objCount;			// overall number of objects
 	uint64_t objSpace;			// overall size of objects
@@ -95,22 +86,28 @@ struct DbMap_ {
 	HANDLE hndl;
 	HANDLE maphndl[MAX_segs];
 #endif
-	DbMap *parent;			// ptr to parent
-	DbMap *database;		// ptr to database
+	DbMap *parent, *db;		// ptr to parent and database
 	DbArena *arena;			// ptr to mapped seg zero
 	char path[MAX_path];	// file database path
 	DbAddr arenaMaps[1];	// array of DbMap pointers for open children
 	DbAddr hndlArray[1];	// array of open handles issued for this arena
 	ArenaDef *arenaDef;		// our arena definition
-	uint64_t arenaId;		// last arena arenaId processsed
+	uint64_t arenaId;		// last child arenaId opened
 	uint16_t pathOff;		// start of path in buffer
-	uint16_t maxSeg;		// maximum segment array index in use
-	uint16_t myIdx;			// our index in parent's handle table
+	uint16_t maxSeg;		// maximum mapped segment array index
 	char mapMutex[1];		// segment mapping mutex
 	char created;			// set if map created
 	char onDisk;			// on disk bool flag
 };
 
+//	database variables
+
+typedef struct {
+	uint64_t timestamp[1];
+	ArenaDef arenaDef[1];
+} DataBase;
+
+#define database(db) ((DataBase *)(db->arena + 1))
 
 /**
  *  memory mapping

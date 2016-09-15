@@ -6,13 +6,19 @@
 #include <stdbool.h>
 
 
+#define MAX_key		4096	// maximum key size in bytes
+
 void initialize();
 void *openDatabase(char *name, uint32_t nameLen, bool onDisk);
 void *openDocStore(void *database, char *name, uint32_t nameLen, bool onDisk);
-void *createIndex(void *docStore, char *idxName, uint32_t nameLen, int bits, int xtra, bool onDisk);
+void *createIndex(void *docStore, char *idxName, uint32_t nameLen, void *keySpec, uint16_t specSize, int bits, int xtra, bool onDisk);
 void *createCursor(void *index);
 void *cloneHandle(void *hndl);
 
-int addDocument(void *hndl, void *obj, uint32_t size, uint64_t *objid, uint64_t txnAddr);
+void *beginTxn(void *database);
+int rollbackTxn(void *database, void *txn);
+int commitTxn(void *database, void *txn);
+
+int addDocument(void *hndl, void *obj, uint32_t objSize, uint64_t *objId, void *txn);
 int insertKey(void *index, uint8_t *key, uint32_t len);
 int addObjId(uint8_t *key, uint64_t addr);

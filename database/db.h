@@ -41,14 +41,11 @@ typedef union {
 typedef union {
 	struct {
 		uint32_t index;		// record ID in the segment
-		uint16_t segment;	// arena segment number
-		uint16_t filler;
+		uint16_t seg:10;	// arena segment number
+		uint16_t txn:6;		// for use in txn
+		uint16_t idx;		// document store arena idx
 	};
 	uint64_t bits;
-	struct {
-		uint64_t addr:48;
-		uint64_t fill:16;
-	};
 } ObjId;
 
 typedef struct DbArena_ DbArena;
