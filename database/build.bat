@@ -1,1 +1,1 @@
-cl /D DEBUG /Od /Z7 standalone.c db*.c btree1*.c
+cl /D DEBUG /Od /Z7 standalone.c db*.c btree1*.c setargv.obj

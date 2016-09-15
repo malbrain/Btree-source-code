@@ -285,7 +285,7 @@ Status stat;
 
 	//  return temporary frame
 
-	addSlotToFrame(hndl->map, hndl->array->list[type].free, addr.bits);
+	addSlotToFrame(hndl->map, hndl->list[type].free, addr.bits);
 
 	// if current page is the root page, split it
 
@@ -352,7 +352,7 @@ DbAddr addr;
 	if( page->garbage < size / 5 )
 		return BTREE_needssplit;
 
-	if( (addr.bits = allocNode(hndl->map, hndl->array->list, type, size, false)) )
+	if( (addr.bits = allocNode(hndl->map, hndl->list, type, size, false)) )
 		frame = getObj(hndl->map, addr);
 	else
 		return ERROR_outofmemory;
@@ -410,7 +410,7 @@ DbAddr addr;
 
 	//  return temporary frame
 
-	addSlotToFrame(hndl->map, hndl->array->list[type].free, addr.bits);
+	addSlotToFrame(hndl->map, hndl->list[type].free, addr.bits);
 
 	//	see if page has enough space now, or does it still need splitting?
 

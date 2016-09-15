@@ -3,26 +3,6 @@
 #include "db_arena.h"
 #include "db_map.h"
 
-extern DbMap memMap[1];
-
-//	return a handle for an arena
-
-Handle *makeHandle(DbMap *map) {
-uint16_t localIdx;
-Handle *hndl;
-
-	localIdx = arrayAlloc(memMap, map->hndlArray, sizeof(Handle));
-	hndl = arrayElement(memMap, map->hndlArray, localIdx, sizeof(Handle));
-
-	hndl->arenaIdx = arrayAlloc(map, map->arena->handleArray, sizeof(HandleArray));
-	hndl->localIdx = localIdx;
-	hndl->map = map;
-
-	hndl->array = arrayElement(map, map->arena->handleArray, hndl->arenaIdx, sizeof(HandleArray));
-
-	return hndl;
-}
-
 void *arrayElement(DbMap *map, DbAddr *array, uint16_t idx, size_t size) {
 uint8_t *base = getObj(map, *array);
 
@@ -127,15 +107,25 @@ DbAddr next[1];
 	array->bits = next->bits;
 }
 
-//	add entry to redblack tree
+//	return a handle for an arena
 
-void arraySort (DbMap *map, DbAddr *array, char *name, int idx) {
+Handle *makeHandle(DbMap *map) {
+Handle *hndl;
+uint16_t idx;
+
+	idx = arrayAlloc(map, map->arena->handleArray, sizeof(Handle));
+
+	hndl = arrayElement(map, map->arena->handleArray, idx, sizeof(Handle));
+	hndl->arenaIdx = idx;
+	hndl->map = map;
+
+	return hndl;
 }
 
 //  check if all handles are dead/closed
 
 void checkHandles(Handle *hndl) {
-DbAddr *array = hndl->map->hndlArray;
+DbAddr *array = hndl->map->arena->handleArray;
 uint64_t *inUse = getObj(hndl->map, *array);
 Handle *hndlArray;
 int idx, jdx;
@@ -160,41 +150,18 @@ int idx, jdx;
 
 void deleteHandle(Handle  *hndl) {
 DbAddr *array = hndl->map->arena->handleArray;
-uint64_t *inUse;
+uint64_t *inUse = getObj(hndl->map, *array);
 
 	atomicOr32(hndl->status, HANDLE_dead);
 
-	// return permanent handle
+	// return handle
  
 	lockLatch(array->latch);
-	inUse = getObj(hndl->map, *array);
 
-	// clear permanent in-use bit
+	// clear handle in-use bit
 
 	inUse[hndl->arenaIdx / 64] &= ~(1ULL << (hndl->arenaIdx % 64));
 	unlockLatch(array->latch);
-
-	// return local handle
-
-	array = memMap->arena->handleArray;
-
-	lockLatch(array->latch);
-	inUse = getObj(memMap, *array);
-
-	// clear local in-use bit
-
-	inUse[hndl->localIdx / 64] &= ~(1ULL << (hndl->localIdx % 64));
-	unlockLatch(array->latch);
-}
-
-//	API entry to close handle
-
-void closeHandle(Handle  *hndl) {
-
-	if (bindHandle(hndl)) {
-		deleteHandle(hndl);
-		releaseHandle(hndl);
-	}
 }
 
 //	bind handle for use in API call
@@ -203,12 +170,11 @@ void closeHandle(Handle  *hndl) {
 bool bindHandle(Handle *hndl) {
 DbAddr *array = hndl->map->arena->handleArray;
 uint32_t actve;
-bool first;
 
 	if (hndl->status[0] & HANDLE_dead)
 		return false;
 
-	//	increment count of active api entries
+	//	increment count of active binds
 
 	actve = atomicAdd32(hndl->status, HANDLE_incr);
 
@@ -219,17 +185,8 @@ bool first;
 
 	if (hndl->map->arena->mutex[0] & DEAD_BIT) {
 		atomicOr32(hndl->status, HANDLE_dead);
-		releaseHandle(hndl);
-		return false;
+		return releaseHandle(hndl), false;
 	}
-
-	//  set objTs on the first bind
-	//  otherwise wait for first bind to set objTs
-
-	if ((actve >> 1) > 1)
-		waitNonZero64(&hndl->array->objTs);
-	else
-		hndl->array->objTs = hndl->map->arena->delTs;
 
 	return true;
 }
@@ -237,20 +194,7 @@ bool first;
 //	release handle binding
 
 void releaseHandle(Handle *hndl) {
-uint32_t actve;
-
-	actve = atomicAdd32(hndl->status, -HANDLE_incr);
-
-	//	decrement active arena pointer count
-	//	if we are the last active api entry
-
-	if (actve == HANDLE_dead) {
-		checkHandles(hndl);
-		return;
-	}
-
-	waitNonZero64(&hndl->array->objTs);
-	hndl->array->objTs = 0;
+	atomicAdd32(hndl->status, -HANDLE_incr);
 }
 
 //	get 64 bit suffix value

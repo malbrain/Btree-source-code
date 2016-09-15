@@ -376,8 +376,8 @@ void *index;
 	//	fire off threads
 
 	for( idx = 0; idx < cnt; idx++ ) {
-		args[idx].database = cloneHandle(database);
 		args[idx].infile = argv[idx + 6];
+		args[idx].database = database;
 		args[idx].onDisk = onDisk;
 		args[idx].type = argv[2];
 		args[idx].bits = bits;

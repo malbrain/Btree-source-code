@@ -52,6 +52,8 @@ void lockLatch(volatile char* latch);
 void unlockLatch(volatile char* latch);
 void waitNonZero(volatile char *zero);
 void waitNonZero64(volatile uint64_t *zero);
+void waitZero(volatile char *zero);
+void waitZero64(volatile uint64_t *zero);
 void art_yield();
 
 /**

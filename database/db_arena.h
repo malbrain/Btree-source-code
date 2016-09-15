@@ -90,7 +90,6 @@ struct DbMap_ {
 	DbArena *arena;			// ptr to mapped seg zero
 	char path[MAX_path];	// file database path
 	DbAddr arenaMaps[1];	// array of DbMap pointers for open children
-	DbAddr hndlArray[1];	// array of open handles issued for this arena
 	ArenaDef *arenaDef;		// our arena definition
 	uint64_t arenaId;		// last child arenaId opened
 	uint16_t pathOff;		// start of path in buffer

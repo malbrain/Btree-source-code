@@ -154,14 +154,14 @@ int keyLen;
 int idx;
 
 	if (bindHandle(docStore->hndl))
-	  if ((addr.bits = allocNode(docStore->hndl->map, docStore->hndl->array->list, -1, objSize + sizeof(Document), false)))
+	  if ((addr.bits = allocNode(docStore->hndl->map, docStore->hndl->list, -1, objSize + sizeof(Document), false)))
 		doc = getObj(docStore->hndl->map, addr);
 	  else
 		return ERROR_outofmemory;
 	else
 		return ERROR_arenadropped;
 
-	docId.bits = allocObjId(docStore->hndl->map, docStore->hndl->array->list);
+	docId.bits = allocObjId(docStore->hndl->map, docStore->hndl->list);
 
 	memset (doc, 0, sizeof(Document));
 

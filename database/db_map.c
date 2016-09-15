@@ -81,6 +81,24 @@ int hndl, flags;
 }
 #endif
 
+void waitZero(volatile char *zero) {
+	while (*zero)
+#ifndef _WIN32
+			pause();
+#else
+			Yield();
+#endif
+}
+
+void waitZero64(volatile uint64_t *zero) {
+	while (*zero)
+#ifndef _WIN32
+			pause();
+#else
+			Yield();
+#endif
+}
+
 void waitNonZero(volatile char *zero) {
 	while (!*zero)
 #ifndef _WIN32

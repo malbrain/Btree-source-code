@@ -13,24 +13,16 @@ typedef struct {
 	DbAddr free[1];		// frames of free objects
 } FreeList;
 
-//	handle array elements
-
-typedef struct {
-	uint64_t objTs;		// object timestamp on current API
-	FreeList list[MaxObjType];
-} HandleArray;
-
 //	Local Handle for an arena
 
 #define HANDLE_dead	0x1
 #define HANDLE_incr	0x2
 
 typedef struct {
-	HandleArray *array;	// pointer to arena handle entry
+	DbMap *map;			// pointer to map
 	uint32_t status[1];	// active entry count/dead status
 	uint16_t arenaIdx;	// arena handle table entry index
-	uint16_t localIdx;	// local handle entry index
-	DbMap *map;			// pointer to map
+	FreeList list[MaxObjType];
 } Handle;
 
 typedef struct {
