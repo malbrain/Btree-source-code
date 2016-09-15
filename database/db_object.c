@@ -3,156 +3,123 @@
 #include "db_arena.h"
 #include "db_map.h"
 
+//	return payload address for an array element idx
+//	n.b. element 63 in each array block is never used
+
 void *arrayElement(DbMap *map, DbAddr *array, uint16_t idx, size_t size) {
-uint8_t *base = getObj(map, *array);
-
-	base += array->nslot * sizeof(uint64_t);
-	return (void *)(base + size * idx);
-}
-
-//	assign an array element
-//	return payload address
-
-void *arrayAssign(DbMap *map, DbAddr *array, uint16_t idx, size_t size) {
+uint64_t *inUse;
 uint8_t *base;
+DbAddr *addr;
 
-	if (array->nslot * 64 <= idx)
-		arrayExpand(map, array, size, idx);
+	lockLatch(array->latch);
 
-	base = getObj(map, *array);
-	base += array->nslot * sizeof(uint64_t);
-	return (void *)(base + size * idx);
+	if (!array->addr) {
+		array->bits = allocBlk(map, sizeof(DbAddr) * 256, true) | ADDR_MUTEX_SET;
+		addr = getObj(map, *array);
+		addr->bits = allocBlk(map, sizeof(uint64_t) + size * 63, true);
+		inUse = getObj(map, *addr);
+		*inUse |= 1ULL << 63;
+	} else
+		addr = getObj(map, *array);
+
+	while (idx / 64 > array->maxidx)
+	  if (array->maxidx == 255) {
+#ifdef DEBUG
+		fprintf(stderr, "Array Overflow file: %s\n", map->path);
+#endif
+		return NULL;
+	  } else {
+		addr[++array->maxidx].bits = allocBlk(map, sizeof(uint64_t) + size * 63, true);
+		inUse = getObj(map, addr[array->maxidx]);
+		*inUse |= 1ULL << 63;
+	  }
+
+	inUse = getObj(map, addr[idx / 64]);
+	*inUse |= 1ULL << idx % 64;
+
+	base = (uint8_t *)(inUse + 1);
+	base += size * (idx % 64);
+	unlockLatch(array->latch);
+
+	return (void *)base;
 }
 
 //	allocate an array element
 
 uint16_t arrayAlloc(DbMap *map, DbAddr *array, size_t size) {
-uint64_t *inUse, *newArray;
 unsigned long bits[1];
+uint64_t *inUse;
+DbAddr *addr;
 int idx, max;
-
-  lockLatch(array->latch);
-
-  while (true) {
-	if (array->nslot)
-		inUse = getObj(map, *array);
-
-	//  find unused array entry
-
-	for (idx = 0; idx < array->nslot; idx++) {
-	  if (!~inUse[idx])
-		continue;
-
-#	  ifdef _WIN32
-		_BitScanForward64(bits, ~inUse[idx]);
-#	  else
-		*bits = (__builtin_ffs (~inUse[idx])) - 1;
-#	  endif
-
-	  inUse[idx] |= 1ULL << *bits;
-	  unlockLatch(array->latch);
-	  return *bits + idx * 64;
-	}
-
-	// table is full
-
-	arrayExpand(map, array, size, idx * 64);
-  }
-}
-
-//	increase array size
-
-void arrayExpand(DbMap *map, DbAddr *array, size_t size, uint16_t max) {
-uint64_t *newArray, *inUse;
-DbAddr next[1];
-
-	if (array->nslot)
-		inUse = getObj(map, *array);
-
-	// calculate number of slots
-
-	max += 63;
-	max &= -8;
-	max /= 64;
-
-	if (max)
-		max += max / 2;
-	else
-		max = 1;
-
-	if (max > 255)
-		max = 255;
-
-	if (max <= array->nslot)
-		fprintf(stderr, "Array overflow: %s\n", map->path), exit(1);
-
-	next->bits = allocBlk(map, max * sizeof(uint64_t) + (max * 64) * size, true);
-
-	next->nslot = max;
-
-	// allocate new array
-
-	newArray = getObj(map, *next);
-	memcpy (newArray, inUse, array->nslot);
-	memcpy (newArray + next->nslot, inUse + array->nslot, array->nslot * size);
-
-	// release old array
-
-	if (array->addr)
-		freeBlk(map, array);
-
-	// point to new array, keeping lock in the process
-
-	next->mutex = 1;
-	array->bits = next->bits;
-}
-
-//	return a handle for an arena
-
-Handle *makeHandle(DbMap *map) {
-Handle *hndl;
-uint16_t idx;
-
-	idx = arrayAlloc(map, map->arena->handleArray, sizeof(Handle));
-
-	hndl = arrayElement(map, map->arena->handleArray, idx, sizeof(Handle));
-	hndl->arenaIdx = idx;
-	hndl->map = map;
-
-	return hndl;
-}
-
-//  check if all handles are dead/closed
-
-void checkHandles(Handle *hndl) {
-DbAddr *array = hndl->map->arena->handleArray;
-uint64_t *inUse = getObj(hndl->map, *array);
-Handle *hndlArray;
-int idx, jdx;
-
-	hndlArray = (Handle *)(inUse + array->nslot);
-
-	for (idx = 0; idx < array->nslot; hndlArray += 64, idx++)
-	  for (jdx = 0; jdx < 64; jdx++)
-		if (inUse[idx] & 1ULL << jdx)
-		  if (hndlArray[jdx].status[0] != HANDLE_dead)
-			return;
 
 	lockLatch(array->latch);
 
-	if (hndl->map->arena)
-		closeMap(hndl->map);
+	if (!array->addr) {
+		array->bits = allocBlk(map, sizeof(DbAddr) * 256, true) | ADDR_MUTEX_SET;
+		addr = getObj(map, *array);
+		addr->bits = allocBlk(map, sizeof(uint64_t) + size * 63, true);
+		inUse = getObj(map, *addr);
+		*inUse |= 1ULL << 63;
+	} else
+		addr = getObj(map, *array);
+
+	for (idx = 0; idx <= array->maxidx; idx++) {
+		inUse = getObj(map, addr[idx]);
+
+		//  skip completely used array entry
+
+		if (inUse[0] == ULLONG_MAX)
+			continue;
+
+#		ifdef _WIN32
+		  _BitScanForward64(bits, ~inUse[0]);
+#		else
+		  *bits = (__builtin_ffs (~inUse[0])) - 1;
+#		endif
+
+		*inUse |= 1ULL << *bits;
+		unlockLatch(array->latch);
+		return *bits + idx * 64;
+	}
+
+	// current array is full
+	//	allocate a new segment
+
+	if (array->maxidx == 255) {
+		fprintf(stderr, "Array Overflow file: %s\n", map->path);
+		exit(1);
+	 }
+
+	addr[++array->maxidx].bits = allocBlk(map, sizeof(uint64_t) + size * 63, true);
+	inUse = getObj(map, addr[idx]);
+	*inUse = 1ULL << 63;
+	*inUse |= 1ULL;
 
 	unlockLatch(array->latch);
+	return array->maxidx * 64;
+}
+
+Handle *makeHandle(DbMap *map) {
+DbAddr *array = map->arena->handleArray;
+Handle *hndl;
+uint16_t idx;
+
+	idx = arrayAlloc(map, array, sizeof(Handle));
+
+	hndl = arrayElement(map, array, idx, sizeof(Handle));
+	hndl->arenaIdx = idx;
+	hndl->map = map;
+	return hndl;
 }
 
 //	delete handle
 
 void deleteHandle(Handle  *hndl) {
 DbAddr *array = hndl->map->arena->handleArray;
-uint64_t *inUse = getObj(hndl->map, *array);
+DbAddr *addr = getObj(hndl->map, *array);
+uint64_t *inUse;
 
-	atomicOr32(hndl->status, HANDLE_dead);
+	inUse = getObj(hndl->map, addr[hndl->arenaIdx / 64]);
 
 	// return handle
  
@@ -160,7 +127,7 @@ uint64_t *inUse = getObj(hndl->map, *array);
 
 	// clear handle in-use bit
 
-	inUse[hndl->arenaIdx / 64] &= ~(1ULL << (hndl->arenaIdx % 64));
+	inUse[0] &= ~(1ULL << (hndl->arenaIdx % 64));
 	unlockLatch(array->latch);
 }
 
@@ -168,7 +135,6 @@ uint64_t *inUse = getObj(hndl->map, *array);
 //	return false if arena dropped
 
 bool bindHandle(Handle *hndl) {
-DbAddr *array = hndl->map->arena->handleArray;
 uint32_t actve;
 
 	if (hndl->status[0] & HANDLE_dead)

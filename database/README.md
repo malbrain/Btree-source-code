@@ -61,9 +61,9 @@ Sample output with four concurrent threads each storing 10000000 pennysort recor
     started pennysort insert for penny1
     started pennysort insert for penny2
     started pennysort insert for penny3
-     real 0m48.312s
-     user 2m51.475s
-     sys  0m10.352s
+     real 0m42.312s
+     user 2m20.475s
+     sys  0m12.352s
  
     -rw-r--r-- 1 root root 4294836224 Sep  9 00:24 tstdb
     -rw-r--r-- 1 root root 2147090432 Sep  9 00:24 tstdb.index

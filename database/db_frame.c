@@ -203,24 +203,24 @@ Frame *frame;
 //  pull available node from free object frame
 //   call with free object frame locked.
 
-uint64_t getNodeFromFrame(DbMap *map, DbAddr* queue) {
-	if (queue->addr) 
+uint64_t getNodeFromFrame(DbMap *map, DbAddr* free) {
+	if (free->addr) 
 		do {
-			Frame *frame = getObj(map, *queue);
+			Frame *frame = getObj(map, *free);
 			DbAddr slot;
 			//  are there available free objects?
 
-			if (queue->nslot)
-				return frame->slots[--queue->nslot].addr;
+			if (free->nslot)
+				return frame->slots[--free->nslot].addr;
 	
 			//  is there another frame of free objects after the empty frame?
 
 			if (!frame->next.bits)
 				return 0;
 	
-			slot.bits = queue->bits;
-			queue->addr = frame->next.addr;
-			queue->nslot = FrameSlots;
+			slot.bits = free->bits;
+			free->addr = frame->next.addr;
+			free->nslot = FrameSlots;
 			returnFreeFrame(map, slot);
 		} while (true);
 

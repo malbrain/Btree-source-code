@@ -53,7 +53,7 @@ typedef struct ArenaDef_ {
 	uint8_t onDisk;				// arena onDisk/inMemory
 	uint8_t cmd;				// 0 = add, 1 = delete
 	DbAddr next, prev;			// linked list
-	DbAddr arenaHndlIdx[1];		// allocate local child arena handles
+	DbAddr arenaHndlIdx[1];		// assign/remove child arena map slots
 	DbAddr arenaIdList[1];		// head of child arena id list
 	DbAddr arenaNames[1];		// child arena name red/black tree
 } ArenaDef;
@@ -95,7 +95,6 @@ struct DbMap_ {
 	uint16_t pathOff;		// start of path in buffer
 	uint16_t maxSeg;		// maximum mapped segment array index
 	char mapMutex[1];		// segment mapping mutex
-	char created;			// set if map created
 	char onDisk;			// on disk bool flag
 };
 

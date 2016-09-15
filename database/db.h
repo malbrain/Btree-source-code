@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <string.h>
 #include <assert.h>
 #include <stdlib.h>
@@ -23,8 +24,8 @@ typedef union {
 		};
 		union {
 			uint8_t nbyte;		// number of bytes in a span node
-			uint8_t nslot;		// number of slots of frame in use
-			uint8_t nbits;		// power of two for object size
+			uint8_t nslot;		// number of frame slots in use
+			uint8_t maxidx;		// maximum slot index in use
 			uint8_t ttype;		// index transaction type
 			int8_t rbcmp;		// red/black comparison
 		};
@@ -36,7 +37,7 @@ typedef union {
 	};
 } DbAddr;
 
-#define ADDR_MUTEX_SET 0x0000000000001
+#define ADDR_MUTEX_SET 0x1000000000000ULL
 
 typedef union {
 	struct {

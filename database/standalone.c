@@ -156,7 +156,7 @@ FILE *in;
 
 		keySpec->type = pennySort;
 
-		index = createIndex(docStore, "index", strlen("index"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
+		index = createIndex(docStore, "index0", strlen("index0"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
 
 		if( in = fopen (args->infile, "rb") )
 		  while( ch = getc(in), ch != EOF )
@@ -185,7 +185,7 @@ FILE *in;
 
 		keySpec->type = wholeRec;
 
-		index = createIndex(docStore, "index", strlen("index"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
+		index = createIndex(docStore, "index1", strlen("index1"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
 
 		if( in = fopen (args->infile, "r") )
 		  while( ch = getc(in), ch != EOF )

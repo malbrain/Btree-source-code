@@ -29,52 +29,54 @@ DbMap *map;
 	map->arenaDef = db->arenaDef;
 	memcpy(map->arenaDef, arenaDef, sizeof(arenaDef));
 
-	if (map->created)
-		map->arena->type[0] = DatabaseType;
-
+	map->arena->type[0] = DatabaseType;
 	return makeHandle(map);
 }
 
 void *openDocStore(void *hndl, char *path, uint32_t pathLen, bool onDisk) {
 Handle *db = (Handle *)hndl;
 DocStore *docStore;
-DbMap **mapArray;
 uint64_t *inUse;
+DbAddr *addr;
 int idx, jdx;
 DbMap *map;
 
 	docStore = db_malloc(sizeof(DocStore), true);
 
 	if (bindHandle(db))
-		map = createMap(db->map, path, pathLen, 0, 0, sizeof(ObjId), 0, onDisk);
+		lockLatch(db->map->arenaDef->arenaNames->latch);
 	else
 		return NULL;
 
+	map = createMap(db->map, path, pathLen, 0, 0, sizeof(ObjId), 0, onDisk);
 	releaseHandle(db);
 
-	if (map->created)
-		map->arena->type[0] = DocStoreType;
+	map->arena->type[0] = DocStoreType;
 
 	docStore->hndl = makeHandle(map);
 	docStore->count = 0;
+
+	unlockLatch(db->map->arenaDef->arenaNames->latch);
 
 	if (!map->arenaMaps->addr)
 		return docStore;
 
 	lockLatch(map->arenaMaps->latch);
 
-	inUse = getObj(map, *map->arenaMaps);
-	mapArray = (DbMap **)(inUse + map->arenaMaps->nslot);
+	addr = getObj(map, *map->arenaMaps);
 
 	//	create index handles from all open children arenas
 
-	for (idx = 0; idx < map->arenaMaps->nslot; mapArray += 64, idx++)
+	for (idx = 0; idx <= map->arenaMaps->maxidx; idx++) {
+	  inUse = getObj(map, addr[idx]);
+
 	  for (jdx = 0; jdx < 64; jdx++)
-		if (inUse[idx] & 1ULL << jdx)
+		if (inUse[0] & 1ULL << jdx)
 		  if (docStore->count < 64)
-			docStore->indexes[docStore->count++] = makeHandle(mapArray[jdx]);
+			docStore->indexes[docStore->count++] = makeHandle((DbMap *)(inUse + 1) + jdx);
 		  else
 			break;
+	}
 
 	unlockLatch(map->arenaMaps->latch);
 	return docStore;
@@ -97,35 +99,41 @@ DbMap *map;
 		exit(1);
 	}
 
-	if (bindHandle(docStore->hndl))
+	if (bindHandle(docStore->hndl)) {
+		lockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
 		map = createMap(docStore->hndl->map, name, nameLen, 0, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
-	else
+	} else
 		return NULL;
 
-	if (!map)
+	if (!map) {
+		unlockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
 		return NULL;
+	}
 
 	index = makeHandle(map);
 
 	btree = btreeIndex(map);
-	btree->pageSize = 1 << bits;
-	btree->pageBits = bits;
-	btree->leafXtra = xtra;
 
-	btree->keySpec.bits = allocBlk(map, specSize + sizeof(Object), false);
-	obj = getObj(map, btree->keySpec);
+	if (!btree->keySpec.addr) {
+		btree->pageSize = 1 << bits;
+		btree->pageBits = bits;
+		btree->leafXtra = xtra;
 
-	memcpy(obj + 1, keySpec, specSize);
-	obj->size = specSize;
+		btree->keySpec.bits = allocBlk(map, specSize + sizeof(Object), false);
+		obj = getObj(map, btree->keySpec);
 
-	if (map->created)
+		memcpy(obj + 1, keySpec, specSize);
+		obj->size = specSize;
+
 		btreeInit(index);
+	}
 
 	// add index to docStore index handle array
 
 	if (docStore->count < 64)
 		docStore->indexes[docStore->count++] = index;
 
+	unlockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
 	releaseHandle(docStore->hndl);
 	return index;
 }

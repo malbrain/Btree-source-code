@@ -31,7 +31,7 @@ RedBlack *entry;
 
 	if ((entry = rbFind(db, parent->arenaDef->arenaNames, name, nameLen, path))) {
 		arenaDef = rbPayload(entry);
-		catalog = arrayElement(db, parent->arenaMaps, arenaDef->idx, sizeof(*catalog));
+		catalog = arrayElement(parent, parent->arenaMaps, arenaDef->idx, sizeof(*catalog));
 		//	see if our arena has already been opened in our process
 
 		if (!*catalog)
@@ -43,6 +43,7 @@ RedBlack *entry;
 }
 
 //  open/create arena
+//	call with parent's arenaNames r/b tree locked
 
 DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
 DbMap *map, *db = parent->db;
@@ -53,25 +54,23 @@ RedBlack *entry;
 
 	//	see if this arena ArenaDef already exists
 
-	lockLatch(parent->arenaDef->arenaNames->latch);
-
-	if ((map = arenaMap(parent, name, nameLen, path))) {
-		unlockLatch(parent->arenaDef->arenaNames->latch);
+	if ((map = arenaMap(parent, name, nameLen, path)))
 		return map;
-	}
 
 	// otherwise, create new database ArenaDef entry
 
 	if ((entry = rbNew(db, name, nameLen, sizeof(ArenaDef))))
 		arenaDef = rbPayload(entry);
-	else {
-		unlockLatch(parent->arenaDef->arenaNames->latch);
+	else
 		return NULL; // out of memory
-	}
 
-	arenaDef->idx = arrayAlloc(db, parent->arenaDef->arenaHndlIdx, 0);
+	arenaDef->idx = arrayAlloc(parent, parent->arenaDef->arenaHndlIdx, 0);
 	arenaDef->id = atomicAdd64(&parent->arenaDef->arenaId, 1);
 	arenaDef->node.bits = entry->addr.bits;
+	arenaDef->localSize = localSize;
+	arenaDef->initSize = initSize;
+	arenaDef->baseSize = baseSize;
+	arenaDef->objSize = objSize;
 	arenaDef->onDisk = onDisk;
  	arenaDef->next.bits = 0;
  	arenaDef->prev.bits = 0;
@@ -79,18 +78,17 @@ RedBlack *entry;
 
 	map = openMap(parent, name, nameLen, arenaDef);
 
-	catalog = arrayAssign(parent, parent->arenaMaps, arenaDef->idx, sizeof(*catalog));
+	catalog = arrayElement(parent, parent->arenaMaps, arenaDef->idx, sizeof(*catalog));
 	*catalog = map;
 
 	//	add arena as parent child arena
 
 	rbAdd(parent, parent->arenaDef->arenaNames, entry, path);
-	unlockLatch(parent->arenaDef->arenaNames->latch);
 	return map;
 }
 
 //  open/create an Object database/store/index arena file
-//	call with arenaNames locked
+//	call with parent's arenaNames r/b tree locked
 
 DbMap *openMap(DbMap *parent, char *name, uint32_t nameLen, ArenaDef *arenaDef) {
 DbArena *segZero = NULL;
@@ -239,8 +237,6 @@ uint32_t bits;
 	map->arena->segBits = bits;
 	map->arena->delTs = 1;
 	map->arenaDef = arenaDef;
-	map->created = true;
-
 	return map;
 }
 
