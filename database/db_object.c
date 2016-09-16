@@ -4,7 +4,6 @@
 #include "db_map.h"
 
 //	return payload address for an array element idx
-//	n.b. element 63 in each array block is never used
 
 void *arrayElement(DbMap *map, DbAddr *array, uint16_t idx, size_t size) {
 uint64_t *inUse;
@@ -16,9 +15,7 @@ DbAddr *addr;
 	if (!array->addr) {
 		array->bits = allocBlk(map, sizeof(DbAddr) * 256, true) | ADDR_MUTEX_SET;
 		addr = getObj(map, *array);
-		addr->bits = allocBlk(map, sizeof(uint64_t) + size * 63, true);
-		inUse = getObj(map, *addr);
-		*inUse |= 1ULL << 63;
+		addr->bits = allocBlk(map, sizeof(uint64_t) + size * 64, true);
 	} else
 		addr = getObj(map, *array);
 
@@ -28,11 +25,8 @@ DbAddr *addr;
 		fprintf(stderr, "Array Overflow file: %s\n", map->path);
 #endif
 		return NULL;
-	  } else {
-		addr[++array->maxidx].bits = allocBlk(map, sizeof(uint64_t) + size * 63, true);
-		inUse = getObj(map, addr[array->maxidx]);
-		*inUse |= 1ULL << 63;
-	  }
+	  } else
+		addr[++array->maxidx].bits = allocBlk(map, sizeof(uint64_t) + size * 64, true);
 
 	inUse = getObj(map, addr[idx / 64]);
 	*inUse |= 1ULL << idx % 64;
@@ -57,9 +51,7 @@ int idx, max;
 	if (!array->addr) {
 		array->bits = allocBlk(map, sizeof(DbAddr) * 256, true) | ADDR_MUTEX_SET;
 		addr = getObj(map, *array);
-		addr->bits = allocBlk(map, sizeof(uint64_t) + size * 63, true);
-		inUse = getObj(map, *addr);
-		*inUse |= 1ULL << 63;
+		addr->bits = allocBlk(map, sizeof(uint64_t) + size * 64, true);
 	} else
 		addr = getObj(map, *array);
 
@@ -90,10 +82,9 @@ int idx, max;
 		exit(1);
 	 }
 
-	addr[++array->maxidx].bits = allocBlk(map, sizeof(uint64_t) + size * 63, true);
+	addr[++array->maxidx].bits = allocBlk(map, sizeof(uint64_t) + size * 64, true);
 	inUse = getObj(map, addr[idx]);
-	*inUse = 1ULL << 63;
-	*inUse |= 1ULL;
+	*inUse = 1ULL;
 
 	unlockLatch(array->latch);
 	return array->maxidx * 64;

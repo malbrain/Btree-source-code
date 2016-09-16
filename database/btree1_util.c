@@ -30,6 +30,8 @@ uint8_t *btreeAddr(BtreePage *page, uint32_t off)
 #define slotptr(p,x) btreeSlot(p,x)
 #endif
 
+uint32_t Splits;
+
 // split the root and raise the height of the btree
 
 Status btreeSplitRoot(Handle *hndl, BtreeSet *root, DbAddr right, uint8_t *leftKey) {
@@ -114,6 +116,10 @@ uint32_t totLen;
 uint8_t *key;
 bool stopper;
 Status stat;
+
+#ifdef DEBUG
+	atomicAdd32(&Splits, 1);
+#endif
 
 	librarian.bits = 0;
 	librarian.type = Btree_librarian;
@@ -285,7 +291,7 @@ Status stat;
 
 	//  return temporary frame
 
-	addSlotToFrame(hndl->map, hndl->list[type].free, addr.bits);
+	freeNode(hndl->map, hndl->list, addr);
 
 	// if current page is the root page, split it
 
@@ -410,7 +416,7 @@ DbAddr addr;
 
 	//  return temporary frame
 
-	addSlotToFrame(hndl->map, hndl->list[type].free, addr.bits);
+	freeNode(hndl->map, hndl->list, addr);
 
 	//	see if page has enough space now, or does it still need splitting?
 

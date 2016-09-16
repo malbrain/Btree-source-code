@@ -9,8 +9,8 @@ uint64_t allocFrame( DbMap *map);
 //	fill in new frame with new available objects
 //	return false if out of memory
 
-bool initObjFrame(DbMap *map, DbAddr *free, uint32_t type, uint32_t size) {
-uint32_t dup = FrameSlots;
+uint32_t initObjFrame(DbMap *map, DbAddr *free, uint32_t type, uint32_t size) {
+uint32_t dup = FrameSlots, idx;
 Frame *frame;
 DbAddr slot;
 	
@@ -39,12 +39,12 @@ DbAddr slot;
 
 	slot.type = type;
 
-	while (dup--) {
-		frame->slots[dup].bits = slot.bits;
+	for (idx = dup; idx--; ) {
+		frame->slots[idx].bits = slot.bits;
 		slot.offset += size >> 3;
 	}
 
-	return true;
+	return dup;
 }
 
 //  allocate frame full of empty frames for free list

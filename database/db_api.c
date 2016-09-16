@@ -58,27 +58,27 @@ DbMap *map;
 
 	unlockLatch(db->map->arenaDef->arenaNames->latch);
 
-	if (!map->arenaMaps->addr)
+	if (!map->childMaps->addr)
 		return docStore;
 
-	lockLatch(map->arenaMaps->latch);
+	lockLatch(map->childMaps->latch);
 
-	addr = getObj(map, *map->arenaMaps);
+	addr = getObj(map, *map->childMaps);
 
 	//	create index handles from all open children arenas
 
-	for (idx = 0; idx <= map->arenaMaps->maxidx; idx++) {
+	for (idx = 0; idx <= map->childMaps->maxidx; idx++) {
 	  inUse = getObj(map, addr[idx]);
 
 	  for (jdx = 0; jdx < 64; jdx++)
 		if (inUse[0] & 1ULL << jdx)
 		  if (docStore->count < 64)
-			docStore->indexes[docStore->count++] = makeHandle((DbMap *)(inUse + 1) + jdx);
+			docStore->indexes[docStore->count++] = makeHandle(((DbMap **)(inUse + 1))[jdx]);
 		  else
 			break;
 	}
 
-	unlockLatch(map->arenaMaps->latch);
+	unlockLatch(map->childMaps->latch);
 	return docStore;
 }
 
@@ -112,7 +112,12 @@ DbMap *map;
 
 	index = makeHandle(map);
 
-	btree = btreeIndex(map);
+	if (bindHandle(index))
+		btree = btreeIndex(map);
+	else {
+		unlockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
+		return NULL;
+	}
 
 	if (!btree->keySpec.addr) {
 		btree->pageSize = 1 << bits;
@@ -134,6 +139,8 @@ DbMap *map;
 		docStore->indexes[docStore->count++] = index;
 
 	unlockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
+
+	releaseHandle(index);
 	releaseHandle(docStore->hndl);
 	return index;
 }
@@ -185,6 +192,7 @@ int idx;
 
 	if (result)
 		*result = docId.bits;
+
 /*
 	//  any recent index arrivals from another process?
 

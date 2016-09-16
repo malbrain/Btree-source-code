@@ -11,3 +11,9 @@ typedef struct {
 
 void returnFreeFrame(DbMap *map, DbAddr slot);
 
+uint64_t getNodeFromFrame (DbMap *map, DbAddr *queue);
+bool getNodeWait (DbMap *map, DbAddr *queue, DbAddr *tail);
+uint32_t initObjFrame (DbMap *map, DbAddr *queue, uint32_t type, uint32_t size);
+bool addSlotToFrame(DbMap *map, DbAddr *head, uint64_t addr);
+
+

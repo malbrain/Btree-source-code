@@ -168,7 +168,7 @@ FILE *in;
 #endif
 			  line++;
 
-			  if ((stat = addDocument (docStore, key + 10, len - 10, &objId, 0)))
+			  if ((stat = addDocument (docStore, key, len, &objId, 0)))
 				  fprintf(stderr, "Add Error %d Line: %d\n", stat, line), exit(0);
 			  len = 0;
 			  continue;

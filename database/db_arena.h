@@ -89,10 +89,10 @@ struct DbMap_ {
 	DbMap *parent, *db;		// ptr to parent and database
 	DbArena *arena;			// ptr to mapped seg zero
 	char path[MAX_path];	// file database path
-	DbAddr arenaMaps[1];	// array of DbMap pointers for open children
+	DbAddr childMaps[1];	// array of DbMap pointers for open children
 	ArenaDef *arenaDef;		// our arena definition
 	uint64_t arenaId;		// last child arenaId opened
-	uint16_t pathOff;		// start of path in buffer
+	uint16_t pathLen;		// length of path in buffer
 	uint16_t maxSeg;		// maximum mapped segment array index
 	char mapMutex[1];		// segment mapping mutex
 	char onDisk;			// on disk bool flag
@@ -118,9 +118,10 @@ bool mapSeg(DbMap *map, uint32_t segNo);
 bool newSeg(DbMap *map, uint32_t minSize);
 void mapSegs(DbMap *map);
 
-int getPath(char *path, int off, char *name, int len, DbMap *parent);
+int getPath(char *path, int max, char *name, int len, DbMap *parent);
 #ifdef _WIN32
 HANDLE openPath(char *name);
 #else
 int openPath(char *name);
 #endif
+

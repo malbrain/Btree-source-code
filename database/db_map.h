@@ -32,10 +32,7 @@ void *getObj(DbMap *map, DbAddr addr);
 void freeBlk(DbMap *map, DbAddr *addr);
 
 uint64_t allocNode(DbMap *map, FreeList *list, int type, uint32_t size, bool zeroit);
-uint64_t getNodeFromFrame (DbMap *map, DbAddr *queue);
-bool getNodeWait (DbMap *map, DbAddr *queue, DbAddr *tail);
-bool initObjFrame (DbMap *map, DbAddr *queue, uint32_t type, uint32_t size);
-bool addSlotToFrame(DbMap *map, DbAddr *head, uint64_t addr);
+void freeNode(DbMap *map, FreeList *list, DbAddr slot);
 
 void *fetchIdSlot (DbMap *map, ObjId objId);
 uint64_t getFreeFrame(DbMap *map);

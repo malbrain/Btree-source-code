@@ -22,32 +22,20 @@
 
 //  assemble filename path
 
-int getPath(char *path, int off, char *name, int len, DbMap *parent) {
-int idx;
+int getPath(char *path, int max, char *name, int len, DbMap *parent) {
+int off = 0;
 
-	path[--off] = 0;
-
-	if (off > len)
-		off -= len;
-	else
-		return -1;
-
-	memcpy(path + off, name, len);
-
-	//  prepend parent name
+	//  start with parent name
 
 	if (parent) {
-		path[--off] = '.';
-		len = MAX_path - parent->pathOff - 1;
-
-		if (off > len)
-			off -= len;
-		else
-			return -1;
-
-		memcpy(path + off, parent->path + parent->pathOff, len);
+		memcpy(path, parent->path, parent->pathLen);
+		off = parent->pathLen;
+		path[off++] = '.';
 	}
 
+	memcpy(path + off, name, len);
+	off += len;
+	path[off] = 0;
 	return off;
 }
 
@@ -143,7 +131,7 @@ void unlockLatch(volatile char* latch) {
 
 int64_t atomicAdd64(volatile int64_t *value, int64_t amt) {
 #ifndef _WIN32
-	return __sync_fetch_and_add(value, amt) + amt;
+	return __sync_add_and_fetch(value, amt);
 #else
 	return _InterlockedAdd64( value, amt);
 #endif
@@ -151,7 +139,7 @@ int64_t atomicAdd64(volatile int64_t *value, int64_t amt) {
 
 int32_t atomicAdd32(volatile int32_t *value, int32_t amt) {
 #ifndef _WIN32
-	return __sync_fetch_and_add(value, amt) + amt;
+	return __sync_add_and_fetch(value, amt);
 #else
 	return _InterlockedAdd( (volatile long *)value, amt);
 #endif
@@ -185,7 +173,7 @@ int flags = MAP_SHARED;
 	mem = mmap(NULL, size, PROT_READ | PROT_WRITE, flags, map->hndl, offset);
 
 	if (mem == MAP_FAILED) {
-		fprintf (stderr, "Unable to mmap %s, offset = %llx, size = %llx, error = %d", map->path + map->pathOff, offset, size, errno);
+		fprintf (stderr, "Unable to mmap %s, offset = %llx, size = %llx, error = %d", map->path, offset, size, errno);
 		return NULL;
 	}
 #else
@@ -193,14 +181,14 @@ int flags = MAP_SHARED;
 		return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
 	if (!(map->maphndl[segNo] = CreateFileMapping(map->hndl, NULL, PAGE_READWRITE, (DWORD)((offset + size) >> 32), (DWORD)(offset + size), NULL))) {
-		fprintf (stderr, "Unable to CreateFileMapping %s, size = %llx, segment = %d error = %d\n", map->path + map->pathOff, offset + size, segNo, (int)GetLastError());
+		fprintf (stderr, "Unable to CreateFileMapping %s, size = %llx, segment = %d error = %d\n", map->path, offset + size, segNo, (int)GetLastError());
 		return NULL;
 	}
 
 	mem = MapViewOfFile(map->maphndl[segNo], FILE_MAP_WRITE, offset >> 32, offset, size);
 
 	if (!mem) {
-		fprintf (stderr, "Unable to MapViewOfFile %s, offset = %llx, size = %llx, error = %d\n", map->path + map->pathOff, offset, size, (int)GetLastError());
+		fprintf (stderr, "Unable to MapViewOfFile %s, offset = %llx, size = %llx, error = %d\n", map->path, offset, size, (int)GetLastError());
 		return NULL;
 	}
 #endif
