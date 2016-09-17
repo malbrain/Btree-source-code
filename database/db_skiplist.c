@@ -77,13 +77,18 @@ SkipEntry *entry;
 	  if (*entry->key != key)
 		return;
 
-	  while (entry - skipList->array < next->nslot - 1) {
-		entry[0] = entry[1];
-		entry++;
+	  //  remove the entry slot
+
+	  if (--next->nslot) {
+		while (entry - skipList->array < next->nslot) {
+		  entry[0] = entry[1];
+		  entry++;
+		}
+
+		return;
 	  }
 
-	  if (--next->nslot)
-		return;
+	  //  skip list node is empty, remove it
 
 	  if (prevList)
 		prevList->next->bits = skipList->next->bits;
