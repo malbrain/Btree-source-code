@@ -1,1 +1,1 @@
-cc -D FUTEX -O3 -g -o dbtest db*.c btree1*.c standalone.c -lpthread
+cc -O3 -g -o dbtest db*.c btree1*.c standalone.c -lpthread
