@@ -1,6 +1,7 @@
 #include <errno.h>
 #include <string.h>
 
+#include "db.h"
 #include "db_api.h"
 
 #ifndef unix
@@ -129,9 +130,12 @@ ThreadArg *args = arg;
 KeySpec keySpec[1];
 uint64_t objId;
 void *docStore;
+ObjId txnId;
 void *index;
 int stat;
 FILE *in;
+
+	txnId.bits = 0;
 
 	docStore = openDocStore(args->database, "documents", strlen("documents"), args->onDisk);
 
@@ -168,7 +172,7 @@ FILE *in;
 #endif
 			  line++;
 
-			  if ((stat = addDocument (docStore, key, len, &objId, 0)))
+			  if ((stat = addDocument (docStore, key, len, &objId, txnId)))
 				  fprintf(stderr, "Add Error %d Line: %d\n", stat, line), exit(0);
 			  len = 0;
 			  continue;

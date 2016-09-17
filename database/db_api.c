@@ -1,4 +1,5 @@
 #include "db.h"
+#include "db_txn.h"
 #include "db_object.h"
 #include "db_arena.h"
 #include "db_map.h"
@@ -153,37 +154,39 @@ void *cloneHandle(void *hndl) {
 	return (void *)makeHandle(((Handle *)hndl)->map);
 }
 
-int addDocument(void *hndl, void *obj, uint32_t objSize, uint64_t *result, void *txnHndl) {
+int addDocument(void *hndl, void *obj, uint32_t objSize, uint64_t *result, ObjId txnId) {
 DocStore *docStore = hndl;
 uint8_t key[MAX_key];
-Txn *txn = txnHndl;
 ArenaDef *arenaDef;
 BtreeIndex *btree;
 Status stat = OK;
+Txn *txn = NULL;
 Handle *index;
 Document *doc;
 Object *spec;
+DbAddr *slot;
 ObjId docId;
 DbAddr addr;
 int keyLen;
 int idx;
 
-	if (bindHandle(docStore->hndl))
-	  if ((addr.bits = allocNode(docStore->hndl->map, docStore->hndl->list, -1, objSize + sizeof(Document), false)))
-		doc = getObj(docStore->hndl->map, addr);
-	  else
-		return ERROR_outofmemory;
-	else
+	if (!bindHandle(docStore->hndl))
 		return ERROR_arenadropped;
+
+	if (txnId.bits)
+		txn = fetchIdSlot(docStore->hndl->map->db, txnId);
+
+	if ((addr.bits = allocNode(docStore->hndl->map, docStore->hndl->list, -1, objSize + sizeof(Document), false)))
+		doc = getObj(docStore->hndl->map, addr);
+	else
+		return ERROR_outofmemory;
 
 	docId.bits = allocObjId(docStore->hndl->map, docStore->hndl->list);
 
 	memset (doc, 0, sizeof(Document));
 
 	if (txn)
-		doc->txnId.bits = txn->txnId.bits;
-	else
-		doc->timestamp = allocateTimestamp(docStore->hndl->map, en_writer);
+		doc->txnId.bits = txnId.bits;
 
 	doc->docId.bits = docId.bits;
 	doc->size = objSize;
@@ -193,8 +196,12 @@ int idx;
 	if (result)
 		*result = docId.bits;
 
+	// assign document to docId slot
+
+	slot = fetchIdSlot(docStore->hndl->map, docId);
+	slot->bits = addr.bits;
 /*
-	//  any recent index arrivals from another process?
+	//  any recent index arrivals from another process/thread?
 
 	while (map->arenaId < map->arenaDef->arenaId) {
 	}
@@ -220,11 +227,12 @@ int idx;
 		releaseHandle(index);
 	}
 
+	if (txn)
+		addIdToTxn(docStore->hndl->map->db, txn, docId, addDoc); 
+
 	releaseHandle(docStore->hndl);
 	return OK;
 }
-
-void *beginTxn(void *db);
 
 int rollbackTxn(void *db, void *txn);
 

@@ -15,10 +15,10 @@ void *createIndex(void *docStore, char *idxName, uint32_t nameLen, void *keySpec
 void *createCursor(void *index);
 void *cloneHandle(void *hndl);
 
-void *beginTxn(void *database);
+uint64_t beginTxn(void *hndl);
 int rollbackTxn(void *database, void *txn);
 int commitTxn(void *database, void *txn);
 
-int addDocument(void *hndl, void *obj, uint32_t objSize, uint64_t *objId, void *txn);
+int addDocument(void *hndl, void *obj, uint32_t objSize, uint64_t *objId, ObjId txnId);
 int insertKey(void *index, uint8_t *key, uint32_t len);
 int addObjId(uint8_t *key, uint64_t addr);

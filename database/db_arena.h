@@ -22,14 +22,6 @@ enum MapType {
 	BtreeIndexType
 };
 
-//	Database transactions: included ObjId frames
-
-typedef struct {
-	DbAddr txnFrame[1];	// frames containing Object Ids
-	uint64_t timestamp;	// txn committed timestamp
-	ObjId txnId;		// txn ID
-} Txn;
-
 //  on disk arena segment
 
 typedef struct {
@@ -86,8 +78,8 @@ struct DbMap_ {
 	HANDLE hndl;
 	HANDLE maphndl[MAX_segs];
 #endif
-	DbMap *parent, *db;		// ptr to parent and database
 	DbArena *arena;			// ptr to mapped seg zero
+	DbMap *parent, *db;		// ptr to parent and database
 	char path[MAX_path];	// file database path
 	DbAddr childMaps[1];	// array of DbMap pointers for open children
 	ArenaDef *arenaDef;		// our arena definition

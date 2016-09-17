@@ -43,11 +43,12 @@ typedef union {
 	struct {
 		uint32_t index;		// record ID in the segment
 		uint16_t seg:10;	// arena segment number
-		uint16_t txn:6;		// for use in txn
+		uint16_t cmd:6;		// for use in txn
 		uint16_t idx;		// document store arena idx
 	};
 	uint64_t bits;
 } ObjId;
 
 typedef struct DbArena_ DbArena;
+typedef struct Handle_ Handle;
 typedef struct DbMap_ DbMap;

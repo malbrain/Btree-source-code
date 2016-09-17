@@ -77,7 +77,7 @@ void *iteratorNext(Iterator *it) {
 DbAddr *addr;
 
 	while (incrObjId(it)) {
-		addr = fetchObjSlot(it->objMap, it->objId);
+		addr = fetchIdSlot(it->objMap, it->objId);
 		if (addr->bits)
 			return getObj(it->objMap, *addr);
 	}
@@ -95,7 +95,7 @@ void *iteratorPrev(Iterator *it) {
 DbAddr *addr;
 
 	while (decrObjId(it)) {
-		addr = fetchObjSlot(it->objMap, it->objId);
+		addr = fetchIdSlot(it->objMap, it->objId);
 		if (addr->bits)
 			return getObj(it->objMap, *addr);
 	}
@@ -115,7 +115,7 @@ ObjId objId;
 
 	objId.bits = objBits;
 
-	addr = fetchObjSlot(it->objMap, objId);
+	addr = fetchIdSlot(it->objMap, objId);
 
 	if (addr->bits)
 		return getObj(it->objMap, *addr);

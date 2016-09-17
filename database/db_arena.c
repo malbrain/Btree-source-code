@@ -444,7 +444,7 @@ uint64_t off = map->arena->segs[currSeg].off;
 
 //	return pointer to Obj slot
 
-void *fetchObjSlot (DbMap *map, ObjId objId) {
+void *fetchIdSlot (DbMap *map, ObjId objId) {
 	if (!objId.index) {
 		fprintf (stderr, "Invalid zero document index: %s\n", map->path);
 		exit(1);

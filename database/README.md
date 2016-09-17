@@ -24,19 +24,21 @@ Sample output from indexing/persisting 10000000 complete pennysort records (cmd 
      user 0m40.067s
      sys  0m2.673s
 
-    -rw-r--r-- 1 root root     131072 Sep  7 17:26 tstdb
-    -rw-r--r-- 1 root root 2147090432 Sep  7 17:27 tstdb.index
+    -rw-r--r-- 1 root root    1048576 Sep 16 22:21 tstdb
+    -rw-r--r-- 1 root root    1048576 Sep 16 22:21 tstdb.documents
+    -rw-r--r-- 1 root root 2147483648 Sep 16 22:22 tstdb.documents.index1
 
 Sample output from storing/indexing/persisting 10000000 pennysort records (1GB):
 
     [root@test7x64 xlink]# ./dbtest tstdb p 13 0 1 penny0
     started pennysort insert for penny0
-     real 0m38.211s
-     user 0m36.218s
+     real 0m28.211s
+     user 0m25.218s
      sys  0m2.023s
 
-    -rw-r--r-- 1 root root 1073610752 Sep  7 22:37 tstdb
-    -rw-r--r-- 1 root root  536477696 Sep  7 22:37 tstdb.index
+    -rw-r--r-- 1 root root    1048576 Sep 16 22:19 tstdb
+    -rw-r--r-- 1 root root 2147483648 Sep 16 22:19 tstdb.documents
+    -rw-r--r-- 1 root root 1073741824 Sep 16 22:19 tstdb.documents.index0
 
 Sample output from indexing/persisting 10000000 complete pennysort records (cmd 'w') InMemory:
 
@@ -65,7 +67,8 @@ Sample output with four concurrent threads each storing 10000000 pennysort recor
      user 2m20.475s
      sys  0m12.352s
  
-    -rw-r--r-- 1 root root 4294836224 Sep  9 00:24 tstdb
-    -rw-r--r-- 1 root root 2147090432 Sep  9 00:24 tstdb.index
+    -rw-r--r-- 1 root root    1048576 Sep 16 22:15 tstdb
+    -rw-r--r-- 1 root root 8589934592 Sep 16 22:16 tstdb.documents
+    -rw-r--r-- 1 root root 4294967296 Sep 16 22:16 tstdb.documents.index0
 
 Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu

@@ -18,12 +18,12 @@ typedef struct {
 #define HANDLE_dead	0x1
 #define HANDLE_incr	0x2
 
-typedef struct {
+struct Handle_ {
 	DbMap *map;			// pointer to map
 	uint32_t status[1];	// active entry count/dead status
 	uint16_t arenaIdx;	// arena handle table entry index
 	FreeList list[MaxObjType];
-} Handle;
+};
 
 typedef struct {
 	Handle *hndl;		// docStore handle
@@ -32,11 +32,11 @@ typedef struct {
 } DocStore;
 
 typedef struct {
-	uint64_t timestamp;	// commitment timestamp
+	DbAddr prevDoc[1];	// previous version of doc
 	uint64_t version;	// version of the document
-	DbAddr previous;	// previous version of doc
 	ObjId docId;		// ObjId of the document
-	ObjId txnId;		// optional database txn ID
+	ObjId txnId;		// insert/update txn ID
+	ObjId delId;		// delete txn ID
 	uint32_t size;		// object size
 } Document;
 
