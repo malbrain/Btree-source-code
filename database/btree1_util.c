@@ -477,7 +477,7 @@ uint32_t good = 0;
 	//	tested as .ge. the passed key.
 
 	while( (diff = higher - low) ) {
-		slot = low + ( diff >> 1 );
+		slot = low + diff / 2;
 		if( btreeKeyCmp (keyptr(page, slot), key, keyLen) < 0 )
 			low = slot + 1;
 		else

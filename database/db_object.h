@@ -3,6 +3,7 @@
 enum ObjType {
 	FrameType,
 	ObjIdType,			// ObjId value
+	SkipType,			// skip list node
 	MinObjType = 3,		// minimum object size in bits
 	MaxObjType = 24		// each power of two, 3 - 24
 };
@@ -71,3 +72,7 @@ void *arrayElement(DbMap *map, DbAddr *array, uint16_t idx, size_t size);
 void *arrayAssign(DbMap *map, DbAddr *array, uint16_t idx, size_t size);
 void arrayExpand(DbMap *map, DbAddr *array, size_t size, uint16_t idx);
 uint16_t arrayAlloc(DbMap *map, DbAddr *array, size_t size);
+
+uint64_t *skipFind(Handle *hndl, DbAddr *skip, uint64_t key);
+void skipPush(Handle *hndl, DbAddr *skip, uint64_t key, uint64_t val);
+void skipDel(Handle *hndl, DbAddr *skip, uint64_t key);

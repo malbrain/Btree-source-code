@@ -22,7 +22,7 @@ typedef enum {
 //	types of btree pages/allocations
 
 typedef enum{
-	Btree_rootPage,
+	Btree_rootPage = 3,
 	Btree_interior,
 	Btree_leafPage,
 	Btree_maxType
