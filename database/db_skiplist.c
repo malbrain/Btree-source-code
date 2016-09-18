@@ -19,17 +19,16 @@ typedef struct {
 //	search SkipList node for key value
 
 SkipEntry *skipSearch(SkipList *skipList, int high, uint64_t key) {
-int low = 0, diff, slot;
+int low = 0, diff;
 
 	//	high is tested gt key
 	//	low is tested le key
 
-	while ((diff = high - low - 1)) {
-		slot = low + diff / 2;
-		if (*skipList->array[slot].key > key)
-			high = slot;
+	while ((diff = (high - low) / 2)) {
+		if (*skipList->array[low + diff].key > key)
+			high = low + diff;
 		else
-			low = slot;
+			low += diff;
 	}
 
 	return skipList->array + low;
