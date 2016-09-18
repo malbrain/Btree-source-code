@@ -18,11 +18,11 @@ typedef struct {
 SkipEntry *skipSearch(SkipList *skipList, int high, uint64_t key) {
 int low = 0, diff;
 
-	//	high is tested gt key
-	//	low is tested le key
+	//	key < high
+	//	key >= low
 
 	while ((diff = (high - low) / 2))
-		if (*skipList->array[low + diff].key > key)
+		if (key < *skipList->array[low + diff].key)
 			high = low + diff;
 		else
 			low += diff;
