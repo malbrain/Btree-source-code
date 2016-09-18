@@ -56,6 +56,13 @@ enum ReaderWriterEnum {
 	en_current
 };
 
+//	skip list entry
+
+typedef struct {
+	uint64_t key[1];	// entry key
+	uint64_t val[1];	// entry value
+} SkipEntry;
+
 bool isReader(uint64_t ts);
 bool isWriter(uint64_t ts);
 bool isCommitted(uint64_t ts);
@@ -73,6 +80,6 @@ void *arrayAssign(DbMap *map, DbAddr *array, uint16_t idx, size_t size);
 void arrayExpand(DbMap *map, DbAddr *array, size_t size, uint16_t idx);
 uint16_t arrayAlloc(DbMap *map, DbAddr *array, size_t size);
 
-uint64_t *skipFind(Handle *hndl, DbAddr *skip, uint64_t key);
+SkipEntry *skipFind(Handle *hndl, DbAddr *skip, uint64_t key);
 void skipPush(Handle *hndl, DbAddr *skip, uint64_t key, uint64_t val);
 void skipDel(Handle *hndl, DbAddr *skip, uint64_t key);

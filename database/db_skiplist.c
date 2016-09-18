@@ -7,16 +7,13 @@
 #define SKIP_node 31
 
 typedef struct {
-	uint64_t key[1];	// entry key
-	uint64_t val[1];	// entry value
-} SkipEntry;
-
-typedef struct {
 	SkipEntry array[SKIP_node];	// array of key/value pairs
 	DbAddr next[1];				// next block of keys
 } SkipList;
 
 //	search SkipList node for key value
+//	return entry pointer if it exists,
+//	or NULL if it doesn't
 
 SkipEntry *skipSearch(SkipList *skipList, int high, uint64_t key) {
 int low = 0, diff;
@@ -24,34 +21,29 @@ int low = 0, diff;
 	//	high is tested gt key
 	//	low is tested le key
 
-	while ((diff = (high - low) / 2)) {
+	while ((diff = (high - low) / 2))
 		if (*skipList->array[low + diff].key > key)
 			high = low + diff;
 		else
 			low += diff;
-	}
 
-	return skipList->array + low;
+	if (*skipList->array[low].key == key)
+		return skipList->array + low;
+
+	return NULL;
 }
 
 //	find key value in skiplist, return value address
 
-uint64_t *skipFind(Handle *hndl, DbAddr *skip, uint64_t key) {
+SkipEntry *skipFind(Handle *hndl, DbAddr *skip, uint64_t key) {
 DbAddr *next = skip;
 SkipList *skipList;
-SkipEntry *entry;
 
   while (next->addr) {
 	skipList = getObj(hndl->map, *next);
 
-	if (*skipList->array->key <= key) {
-	  entry = skipSearch(skipList, next->nslot, key);
-
-	  if (*entry->key == key)
-		return entry->val;
-
-	  return NULL;
-	}
+	if (*skipList->array->key <= key)
+	  return skipSearch(skipList, next->nslot, key);
 
 	next = skipList->next;
   }
@@ -71,9 +63,7 @@ SkipEntry *entry;
 	skipList = getObj(hndl->map, *next);
 
 	if (*skipList->array->key <= key) {
-	  entry = skipSearch(skipList, next->nslot, key);
-
-	  if (*entry->key != key)
+	  if (!(entry = skipSearch(skipList, next->nslot, key)))
 		return;
 
 	  //  remove the entry slot
