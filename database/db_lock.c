@@ -154,7 +154,7 @@ void mutex_unlock(Mutex* mutex) {
 #ifdef FUTEX
 //  a phase fair reader/writer lock implementation
 
-void WriteLock3(RWLock3 *lock)
+void writeLock3(RWLock3 *lock)
 {
 uint32_t spinCount = 0;
 uint16_t w, r, tix;
@@ -190,7 +190,7 @@ uint32_t prev;
 	}
 }
 
-void WriteUnlock3 (RWLock3 *lock)
+void writeUnlock3 (RWLock3 *lock)
 {
 	// clear writer waiting and phase bit
 	//	and advance writer ticket
@@ -213,7 +213,7 @@ void WriteUnlock3 (RWLock3 *lock)
 	sys_futex( (void *)&lock->rw[1], FUTEX_WAKE_BITSET, INT_MAX, NULL, NULL, QueWr );
 }
 
-void ReadLock3 (RWLock3 *lock)
+void readLock3 (RWLock3 *lock)
 {
 uint32_t prev;
 uint16_t w;
@@ -229,7 +229,7 @@ uint16_t w;
 	  }
 }
 
-void ReadUnlock3 (RWLock3 *lock)
+void readUnlock3 (RWLock3 *lock)
 {
 	__sync_fetch_and_add (lock->rout, RINC);
 
@@ -246,7 +246,7 @@ void ReadUnlock3 (RWLock3 *lock)
 #endif
 //	simple Phase-Fair FIFO rwlock
 
-void WriteLock1 (RWLock1 *lock)
+void writeLock1 (RWLock1 *lock)
 {
 Counter prev[1], next[1];
 uint32_t spinCount = 0;
@@ -266,7 +266,7 @@ uint32_t spinCount = 0;
 		lock_sleep(spinCount);
 }
 
-void WriteUnlock1 (RWLock1 *lock)
+void writeUnlock1 (RWLock1 *lock)
 {
 # ifndef _WIN32
 	__sync_fetch_and_add (lock->completions->writer, 1);
@@ -275,7 +275,7 @@ void WriteUnlock1 (RWLock1 *lock)
 # endif
 }
 
-void ReadLock1 (RWLock1 *lock)
+void readLock1 (RWLock1 *lock)
 {
 uint32_t spinCount = 0;
 Counter prev[1];
@@ -291,7 +291,7 @@ Counter prev[1];
 		lock_sleep(spinCount);
 }
 
-void ReadUnlock1 (RWLock1 *lock)
+void readUnlock1 (RWLock1 *lock)
 {
 # ifndef _WIN32
 	__sync_fetch_and_add (lock->completions->reader, 1);
@@ -302,19 +302,19 @@ void ReadUnlock1 (RWLock1 *lock)
 
 //	mutex based reader-writer lock
 
-void WriteLock2 (RWLock2 *lock)
+void writeLock2 (RWLock2 *lock)
 {
 	mutex_lock(lock->xcl);
 	mutex_lock(lock->wrt);
 	mutex_unlock(lock->xcl);
 }
 
-void WriteUnlock2 (RWLock2 *lock)
+void writeUnlock2 (RWLock2 *lock)
 {
 	mutex_unlock(lock->wrt);
 }
 
-void ReadLock2 (RWLock2 *lock)
+void readLock2 (RWLock2 *lock)
 {
 	mutex_lock(lock->xcl);
 #ifdef unix
@@ -327,7 +327,7 @@ void ReadLock2 (RWLock2 *lock)
 	mutex_unlock(lock->xcl);
 }
 
-void ReadUnlock2 (RWLock2 *lock)
+void readUnlock2 (RWLock2 *lock)
 {
 #ifdef unix
 	if( !__sync_sub_and_fetch (lock->readers, 1) )
@@ -338,7 +338,7 @@ void ReadUnlock2 (RWLock2 *lock)
 }
 
 #ifndef FUTEX
-void WriteLock3 (RWLock3 *lock)
+void writeLock3 (RWLock3 *lock)
 {
 uint32_t spinCount = 0;
 uint16_t w, r, tix;
@@ -369,7 +369,7 @@ uint16_t w, r, tix;
 		lock_sleep (spinCount);
 }
 
-void WriteUnlock3 (RWLock3 *lock)
+void writeUnlock3 (RWLock3 *lock)
 {
 #ifdef unix
 	__sync_fetch_and_and (lock->rin, ~MASK);
@@ -379,7 +379,7 @@ void WriteUnlock3 (RWLock3 *lock)
 	lock->serving[0]++;
 }
 
-void ReadLock3 (RWLock3 *lock)
+void readLock3 (RWLock3 *lock)
 {
 uint32_t spinCount = 0;
 uint16_t w;
@@ -395,7 +395,7 @@ uint16_t w;
 		lock_sleep (spinCount);
 }
 
-void ReadUnlock3 (RWLock3 *lock)
+void readUnlock3 (RWLock3 *lock)
 {
 #ifdef unix
 	__sync_fetch_and_add (lock->rout, RINC);
@@ -531,11 +531,11 @@ int idx;
 		AcquireSRWLockShared(lock0), work(1, 0), ReleaseSRWLockShared(lock0);
 #endif
 	  else if (arg->type == RW1Type)
-		ReadLock1(lock1), work(1, 0), ReadUnlock1(lock1);
+		readLock1(lock1), work(1, 0), readUnlock1(lock1);
 	  else if (arg->type == RW2Type)
-		ReadLock2(lock2), work(1, 0), ReadUnlock2(lock2);
+		readLock2(lock2), work(1, 0), readUnlock2(lock2);
 	  else if (arg->type == RW3Type)
-		ReadLock3(lock3), work(1, 0), ReadUnlock3(lock3);
+		readLock3(lock3), work(1, 0), readUnlock3(lock3);
 	  else
 		work(1,0);
 	  if( (idx & 511) == 0)
@@ -546,11 +546,11 @@ int idx;
 		  AcquireSRWLockExclusive(lock0), work(10, 1), ReleaseSRWLockExclusive(lock0);
 #endif
 	  	else if (arg->type == RW1Type)
-		  WriteLock1(lock1), work(10, 1), WriteUnlock1(lock1);
+		  writeLock1(lock1), work(10, 1), writeUnlock1(lock1);
 	  	else if (arg->type == RW2Type)
-		  WriteLock2(lock2), work(10, 1), WriteUnlock2(lock2);
+		  writeLock2(lock2), work(10, 1), writeUnlock2(lock2);
 	  	else if (arg->type == RW3Type)
-		  WriteLock3(lock3), work(10, 1), WriteUnlock3(lock3);
+		  writeLock3(lock3), work(10, 1), writeUnlock3(lock3);
 		else
 		  work(10,1);
 #ifdef DEBUG

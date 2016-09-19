@@ -11,7 +11,6 @@
 #include "db.h"
 #include "db_map.h"
 #include "db_object.h"
-#include "db_redblack.h"
 #include "db_arena.h"
 #include "db_frame.h"
 
@@ -22,77 +21,102 @@ bool mapSeg (DbMap *map, uint32_t currSeg);
 void mapZero(DbMap *map, uint64_t size);
 void mapAll (DbMap *map);
 
-// return existing arena in parent's child list or NULL
-//	call with parent arenaNames r/b tree locked
+//	open map given red/black entry
 
-DbMap *arenaMap(DbMap *parent, char *name, uint32_t nameLen, PathStk *path) {
-DbMap **catalog, *db = parent->db;
+DbMap *arenaRbMap(Handle *hndl, RedBlack *entry) {
+DbMap *parent = hndl->map, **catalog, *map;
 ArenaDef *arenaDef;
+
+	arenaDef = rbPayload(entry);
+
+	writeLock2(parent->childMaps->lock);
+	catalog = skipAdd(hndl, parent->childMaps->head, arenaDef->id);
+
+	//  open it
+
+	if (!*catalog)
+		*catalog = openMap(parent, entry->key, entry->keyLen, arenaDef);
+
+	map = *catalog;
+	writeUnlock2(parent->childMaps->lock);
+	return map;
+}
+
+// return existing arena from parent's child list or NULL
+//	call with parent nameTree r/b tree locked
+
+DbMap *arenaMap(Handle *hndl, char *name, uint32_t nameLen, PathStk *path) {
+DbMap *parent = hndl->map;
+DbMap *db = parent->db;
 RedBlack *entry;
 
-	if ((entry = rbFind(db, parent->arenaDef->arenaNames, name, nameLen, path))) {
-		arenaDef = rbPayload(entry);
-		catalog = arrayElement(parent, parent->childMaps, arenaDef->idx, sizeof(*catalog));
-		//	see if our arena has already been opened in our process
+	//	see if this arena map has already been opened in our process
 
-		if (!*catalog)
-			*catalog = openMap(parent, entry->key, entry->keyLen, rbPayload(entry));
-		return *catalog;
-	}
+	if ((entry = rbFind(db, parent->arenaDef->nameTree, name, nameLen, path)))
+	  return arenaRbMap(hndl, entry);
 
 	return NULL;
 }
 
 //  open/create arena
-//	call with parent's arenaNames r/b tree locked
+//	call with parent's nameTree r/b tree locked
 
-DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
-DbMap *map, *db = parent->db;
+DbMap *createMap(Handle *hndl, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
+DbMap *map, *db = hndl->map->db;
+DbMap *parent = hndl->map;
 ArenaDef *arenaDef;
 DbMap **catalog;
 PathStk path[1];
 RedBlack *entry;
+DbAddr *rbAddr;
 
 	//	see if this arena ArenaDef already exists
 
-	if ((map = arenaMap(parent, name, nameLen, path)))
-		return map;
+	if ((entry = rbFind(db, parent->arenaDef->nameTree, name, nameLen, path)))
+		return arenaRbMap(hndl, entry);
 
 	// otherwise, create new database ArenaDef entry
 
 	if ((entry = rbNew(db, name, nameLen, sizeof(ArenaDef))))
 		arenaDef = rbPayload(entry);
 	else
-		return NULL; // out of memory
+		return NULL;
 
-	arenaDef->idx = arrayAlloc(parent, parent->arenaDef->arenaHndlIdx, 0);
-	arenaDef->id = atomicAdd64(&parent->arenaDef->arenaId, 1);
+	arenaDef->id = atomicAdd64(&parent->arenaDef->childId, CHILDID_INCR);
 	arenaDef->node.bits = entry->addr.bits;
 	arenaDef->localSize = localSize;
 	arenaDef->initSize = initSize;
 	arenaDef->baseSize = baseSize;
 	arenaDef->objSize = objSize;
 	arenaDef->onDisk = onDisk;
- 	arenaDef->next.bits = 0;
- 	arenaDef->prev.bits = 0;
-	arenaDef->cmd = 0;
 
 	map = openMap(parent, name, nameLen, arenaDef);
 
-	catalog = arrayElement(parent, parent->childMaps, arenaDef->idx, sizeof(*catalog));
+	writeLock2(parent->childMaps->lock);
+	catalog = skipAdd(hndl, parent->childMaps->head, arenaDef->id);
 	*catalog = map;
 
-	//	add arena as parent child arena
+	writeUnlock2(parent->childMaps->lock);
 
-	rbAdd(parent, parent->arenaDef->arenaNames, entry, path);
+	//	add arena to parent child arenas
+
+	rbAdd(parent, parent->arenaDef->nameTree, entry, path);
+
+	//	add arenaId to child idList
+
+	writeLock2(parent->arenaDef->idList->lock);
+	rbAddr = skipAdd (hndl, parent->arenaDef->idList->head, arenaDef->id);
+	rbAddr->bits = entry->addr.bits;
+	writeUnlock2(parent->arenaDef->idList->lock);
 	return map;
 }
 
 //  open/create an Object database/store/index arena file
-//	call with parent's arenaNames r/b tree locked
+//	call with parent's nameTree r/b tree locked
 
 DbMap *openMap(DbMap *parent, char *name, uint32_t nameLen, ArenaDef *arenaDef) {
 DbArena *segZero = NULL;
+DataBase *db;
 DbMap *map;
 
 #ifdef _WIN32
@@ -195,6 +219,7 @@ DbMap *initMap (DbMap *map, ArenaDef *arenaDef) {
 uint64_t initSize = arenaDef->initSize;
 uint32_t segOffset;
 uint32_t bits;
+DataBase *db;
 
 	segOffset = sizeof(DbArena) + arenaDef->baseSize;
 	segOffset += 7;
@@ -236,7 +261,17 @@ uint32_t bits;
 	map->arena->segs->size = initSize;
 	map->arena->segBits = bits;
 	map->arena->delTs = 1;
-	map->arenaDef = arenaDef;
+
+	//	are we a database?
+
+	if (map->parent) {
+		map->arenaDef = arenaDef;
+		return map;
+	}
+
+	db = database(map);
+	map->arenaDef = db->arenaDef;
+	memcpy(db->arenaDef, arenaDef, sizeof(ArenaDef));
 	return map;
 }
 
@@ -505,7 +540,7 @@ void freeNode(DbMap *map, FreeList *list, DbAddr slot) {
 // allocate next available object id
 //
 
-uint64_t allocObjId(DbMap *map, FreeList *list) {
+uint64_t allocObjId(DbMap *map, FreeList *list, uint16_t idx) {
 ObjId objId;
 
 	lockLatch(list[ObjIdType].free->latch);
@@ -521,7 +556,7 @@ ObjId objId;
 			}
 	}
 
-	objId.idx = map->arenaDef->idx;
+	objId.idx = idx;
 	unlockLatch(list[ObjIdType].free->latch);
 	return objId.bits;
 }

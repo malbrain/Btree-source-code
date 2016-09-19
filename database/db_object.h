@@ -1,5 +1,7 @@
 #pragma once
 
+#include "db_lock.h"
+
 enum ObjType {
 	FrameType,
 	ObjIdType,			// ObjId value
@@ -27,12 +29,6 @@ struct Handle_ {
 };
 
 typedef struct {
-	Handle *hndl;		// docStore handle
-	Handle *indexes[64];// handles to indexes
-	uint16_t count;		// number of indexes
-} DocStore;
-
-typedef struct {
 	DbAddr prevDoc[1];	// previous version of doc
 	uint64_t version;	// version of the document
 	ObjId docId;		// ObjId of the document
@@ -56,12 +52,33 @@ enum ReaderWriterEnum {
 	en_current
 };
 
+//	skip list head
+
+typedef struct {
+	DbAddr head[1];		// list head
+	RWLock2 lock[1];	// reader/writer lock
+} SkipHead;
+
 //	skip list entry
 
 typedef struct {
 	uint64_t key[1];	// entry key
 	uint64_t val[1];	// entry value
 } SkipEntry;
+
+//	skip list entry array
+
+#define SKIP_node 31
+
+typedef struct {
+	SkipEntry array[SKIP_node];	// array of key/value pairs
+	DbAddr next[1];				// next block of keys
+} SkipList;
+
+//	Identifier bits
+
+#define CHILDID_DROP 0x1
+#define CHILDID_INCR 0x2
 
 bool isReader(uint64_t ts);
 bool isWriter(uint64_t ts);
@@ -82,4 +99,5 @@ uint16_t arrayAlloc(DbMap *map, DbAddr *array, size_t size);
 
 SkipEntry *skipFind(Handle *hndl, DbAddr *skip, uint64_t key);
 void skipPush(Handle *hndl, DbAddr *skip, uint64_t key, uint64_t val);
+void *skipAdd(Handle *hndl, DbAddr *skip, uint64_t key);
 void skipDel(Handle *hndl, DbAddr *skip, uint64_t key);

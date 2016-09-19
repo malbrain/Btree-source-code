@@ -36,18 +36,14 @@ typedef struct {
 typedef struct ArenaDef_ {
 	DbAddr node;				// database redblack node
 	uint64_t id;				// our arena id in parent
-	uint64_t arenaId;			// highest child arenaId issued
+	uint64_t childId;			// highest child Id issued
 	uint64_t initSize;			// initial arena size
 	uint32_t localSize;			// extra space after DbMap
 	uint32_t baseSize;			// extra space after DbArena
 	uint32_t objSize;			// size of ObjectId array slot
-	uint16_t idx;				// arena handle array index
 	uint8_t onDisk;				// arena onDisk/inMemory
-	uint8_t cmd;				// 0 = add, 1 = delete
-	DbAddr next, prev;			// linked list
-	DbAddr arenaHndlIdx[1];		// assign/remove child arena map slots
-	DbAddr arenaIdList[1];		// head of child arena id list
-	DbAddr arenaNames[1];		// child arena name red/black tree
+	DbAddr nameTree[1];			// child arena name red/black tree
+	SkipHead idList[1];			// child nameTree entry addr by id
 } ArenaDef;
 
 //  on disk/mmap arena seg zero
@@ -80,10 +76,9 @@ struct DbMap_ {
 #endif
 	DbArena *arena;			// ptr to mapped seg zero
 	DbMap *parent, *db;		// ptr to parent and database
+	SkipHead childMaps[1];	// skipList of child DbMaps
 	char path[MAX_path];	// file database path
-	DbAddr childMaps[1];	// array of DbMap pointers for open children
 	ArenaDef *arenaDef;		// our arena definition
-	uint64_t arenaId;		// last child arenaId opened
 	uint16_t pathLen;		// length of path in buffer
 	uint16_t maxSeg;		// maximum mapped segment array index
 	char mapMutex[1];		// segment mapping mutex
@@ -93,11 +88,21 @@ struct DbMap_ {
 //	database variables
 
 typedef struct {
-	uint64_t timestamp[1];
-	ArenaDef arenaDef[1];
+	uint64_t timestamp[1];	// database txn timestamp
+	ArenaDef arenaDef[1];	// our create variables
+	DbAddr txnIdx[1];		// array of active idx for txn entries
 } DataBase;
 
 #define database(db) ((DataBase *)(db->arena + 1))
+
+//	docstore variables
+
+typedef struct {
+	uint16_t docIdx;		// our txn index
+	uint8_t init;			// set on init
+} DocStore;
+
+#define docstore(map) ((DocStore *)(map->arena + 1))
 
 /**
  *  memory mapping

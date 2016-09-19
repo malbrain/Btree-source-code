@@ -12,7 +12,6 @@ void initialize() {
 
 void *openDatabase(char *name, uint32_t nameLen, bool onDisk) {
 ArenaDef arenaDef[1];
-DataBase *db;
 DbMap *map;
 
 	memset (arenaDef, 0, sizeof(ArenaDef));
@@ -25,66 +24,107 @@ DbMap *map;
 	if (!map)
 		return NULL;
 
-	db = database(map);
-
-	map->arenaDef = db->arenaDef;
-	memcpy(map->arenaDef, arenaDef, sizeof(arenaDef));
-
-	map->arena->type[0] = DatabaseType;
 	return makeHandle(map);
 }
 
 void *openDocStore(void *hndl, char *path, uint32_t pathLen, bool onDisk) {
-Handle *db = (Handle *)hndl;
+Handle *dbHndl = (Handle *)hndl;
 DocStore *docStore;
+DocHndl *docHndl;
 uint64_t *inUse;
+DataBase *db;
 DbAddr *addr;
 int idx, jdx;
 DbMap *map;
 
-	docStore = db_malloc(sizeof(DocStore), true);
+	docHndl = db_malloc(sizeof(DocHndl), true);
 
-	if (bindHandle(db))
-		lockLatch(db->map->arenaDef->arenaNames->latch);
+	if (bindHandle(dbHndl))
+		db = database(dbHndl->map);
 	else
 		return NULL;
 
-	map = createMap(db->map, path, pathLen, 0, 0, sizeof(ObjId), 0, onDisk);
-	releaseHandle(db);
+	//  create the docStore and assign database txn idx
 
-	map->arena->type[0] = DocStoreType;
+	lockLatch(dbHndl->map->arenaDef->nameTree->latch);
 
-	docStore->hndl = makeHandle(map);
-	docStore->count = 0;
+	if ((map = createMap(dbHndl, path, pathLen, 0, sizeof(DocStore), sizeof(ObjId), 0, onDisk)))
+		docStore = docstore(map);
+	else
+		return NULL;
 
-	unlockLatch(db->map->arenaDef->arenaNames->latch);
-
-	if (!map->childMaps->addr)
-		return docStore;
-
-	lockLatch(map->childMaps->latch);
-
-	addr = getObj(map, *map->childMaps);
-
-	//	create index handles from all open children arenas
-
-	for (idx = 0; idx <= map->childMaps->maxidx; idx++) {
-	  inUse = getObj(map, addr[idx]);
-
-	  for (jdx = 0; jdx < 64; jdx++)
-		if (inUse[0] & 1ULL << jdx)
-		  if (docStore->count < 64)
-			docStore->indexes[docStore->count++] = makeHandle(((DbMap **)(inUse + 1))[jdx]);
-		  else
-			break;
+	if (!docStore->init) {
+		docStore->docIdx = arrayAlloc(dbHndl->map, db->txnIdx, sizeof(uint64_t));
+		docStore->init = 1;
 	}
 
-	unlockLatch(map->childMaps->latch);
-	return docStore;
+	releaseHandle(dbHndl);
+
+	map->arena->type[0] = DocStoreType;
+	docHndl->hndl = makeHandle(map);
+
+	unlockLatch(dbHndl->map->arenaDef->nameTree->latch);
+	return docHndl;
+}
+
+//  open and install index map in docHndl cache
+
+void installIdx(DocHndl *docHndl, SkipEntry *skipEntry) {
+RedBlack *rbEntry;
+DbAddr rbAddr;
+Handle *index;
+Handle **hndl;
+
+	rbAddr.bits = *skipEntry->val;
+	rbEntry = getObj(docHndl->hndl->map->parent, rbAddr);
+
+	index = makeHandle(arenaRbMap(docHndl->hndl, rbEntry));
+	hndl = skipAdd(docHndl->hndl, docHndl->indexes->head, *skipEntry->key);
+	*hndl = index;
+}
+
+//	install new indexes
+
+void installIndexes(DocHndl *docHndl) {
+ArenaDef *arenaDef = docHndl->hndl->map->arenaDef;
+DbAddr *next = arenaDef->idList->head;
+uint64_t maxId = 0;
+SkipList *skipList;
+SkipEntry *entry;
+int idx;
+
+	if (docHndl->childId < arenaDef->childId)
+		readLock2 (arenaDef->idList->lock);
+	else
+		return;
+
+	writeLock2 (docHndl->indexes->lock);
+
+	//	transfer Id slots from arena childId list to our handle list
+
+	while (next->addr) {
+		skipList = getObj(docHndl->hndl->map, *next);
+		idx = next->nslot;
+
+		if (!maxId)
+			maxId = *skipList->array[next->nslot - 1].key;
+
+		while (idx--)
+			if (*skipList->array[idx].key > docHndl->childId)
+				installIdx(docHndl, &skipList->array[idx]);
+			else
+				break;
+
+		next = skipList->next;
+	}
+
+	docHndl->childId = maxId;
+	writeUnlock2 (docHndl->indexes->lock);
+	readUnlock2 (arenaDef->idList->lock);
 }
 
 void *createIndex(void *hndl, char *name, uint32_t nameLen, void *keySpec, uint16_t specSize, int bits, int xtra, bool onDisk) {
-DocStore *docStore = hndl;
+DocHndl *docHndl = hndl;
 BtreeIndex *btree;
 Handle *index;
 Object *obj;
@@ -100,14 +140,14 @@ DbMap *map;
 		exit(1);
 	}
 
-	if (bindHandle(docStore->hndl)) {
-		lockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
-		map = createMap(docStore->hndl->map, name, nameLen, 0, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
+	if (bindHandle(docHndl->hndl)) {
+		lockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
+		map = createMap(docHndl->hndl, name, nameLen, 0, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
 	} else
 		return NULL;
 
 	if (!map) {
-		unlockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
+		unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
 		return NULL;
 	}
 
@@ -116,7 +156,7 @@ DbMap *map;
 	if (bindHandle(index))
 		btree = btreeIndex(map);
 	else {
-		unlockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
+		unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
 		return NULL;
 	}
 
@@ -134,15 +174,10 @@ DbMap *map;
 		btreeInit(index);
 	}
 
-	// add index to docStore index handle array
-
-	if (docStore->count < 64)
-		docStore->indexes[docStore->count++] = index;
-
-	unlockLatch(docStore->hndl->map->arenaDef->arenaNames->latch);
+	unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
 
 	releaseHandle(index);
-	releaseHandle(docStore->hndl);
+	releaseHandle(docHndl->hndl);
 	return index;
 }
 
@@ -154,34 +189,82 @@ void *cloneHandle(void *hndl) {
 	return (void *)makeHandle(((Handle *)hndl)->map);
 }
 
-int addDocument(void *hndl, void *obj, uint32_t objSize, uint64_t *result, ObjId txnId) {
-DocStore *docStore = hndl;
+int installIndexKey(DocHndl *docHndl, SkipEntry *entry, void *obj, uint32_t objSize, ObjId docId) {
+Handle *index = (Handle *)(*entry->val);
 uint8_t key[MAX_key];
-ArenaDef *arenaDef;
 BtreeIndex *btree;
+Object *spec;
+int keyLen;
+int stat;
+
+	if (bindHandle(index))
+		btree = btreeIndex(index->map);
+	else
+		return ERROR_arenadropped;
+
+	spec = getObj(index->map, btree->keySpec);
+	keyLen = keyGenerator(key, obj, objSize, spec + 1, spec->size);
+
+	store64(key + keyLen, docId.bits);
+	keyLen += sizeof(uint64_t);
+
+	stat = btreeInsertKey(index, key, keyLen, 0, Btree_indexed);
+	releaseHandle(index);
+	return stat;
+}
+
+int installIndexKeys(DocHndl *docHndl, Document *doc) {
+DbAddr *next = docHndl->indexes->head;
+SkipList *skipList;
+int idx, stat;
+
+	readLock2 (docHndl->indexes->lock);
+
+	//	install keys for document
+
+	while (next->addr) {
+		skipList = getObj(docHndl->hndl->map, *next);
+		idx = next->nslot;
+
+		while (idx--) {
+			if (~*skipList->array[idx].key & CHILDID_DROP)
+				if ((stat = installIndexKey(docHndl, &skipList->array[idx], doc + 1, doc->size, doc->docId)))
+					return stat;
+		}
+
+		next = skipList->next;
+	}
+
+	readUnlock2 (docHndl->indexes->lock);
+	return OK;
+}
+
+int addDocument(void *hndl, void *obj, uint32_t objSize, uint64_t *result, ObjId txnId) {
+DocHndl *docHndl = hndl;
+DocStore *docStore;
+ArenaDef *arenaDef;
 Status stat = OK;
 Txn *txn = NULL;
-Handle *index;
 Document *doc;
-Object *spec;
 DbAddr *slot;
 ObjId docId;
 DbAddr addr;
-int keyLen;
 int idx;
 
-	if (!bindHandle(docStore->hndl))
+	if (!bindHandle(docHndl->hndl))
 		return ERROR_arenadropped;
 
-	if (txnId.bits)
-		txn = fetchIdSlot(docStore->hndl->map->db, txnId);
+	docStore = docstore(docHndl->hndl->map);
 
-	if ((addr.bits = allocNode(docStore->hndl->map, docStore->hndl->list, -1, objSize + sizeof(Document), false)))
-		doc = getObj(docStore->hndl->map, addr);
+	if (txnId.bits)
+		txn = fetchIdSlot(docHndl->hndl->map->db, txnId);
+
+	if ((addr.bits = allocNode(docHndl->hndl->map, docHndl->hndl->list, -1, objSize + sizeof(Document), false)))
+		doc = getObj(docHndl->hndl->map, addr);
 	else
 		return ERROR_outofmemory;
 
-	docId.bits = allocObjId(docStore->hndl->map, docStore->hndl->list);
+	docId.bits = allocObjId(docHndl->hndl->map, docHndl->hndl->list, docStore->docIdx);
 
 	memset (doc, 0, sizeof(Document));
 
@@ -198,45 +281,28 @@ int idx;
 
 	// assign document to docId slot
 
-	slot = fetchIdSlot(docStore->hndl->map, docId);
+	slot = fetchIdSlot(docHndl->hndl->map, docId);
 	slot->bits = addr.bits;
-/*
-	//  any recent index arrivals from another process/thread?
 
-	while (map->arenaId < map->arenaDef->arenaId) {
-	}
-*/
+	//  install any recent index arrivals from another process/thread
+
+	installIndexes(docHndl);
+
 	//	add keys for the document
-	//	enumerate docStore children (e.g. indexes)
+	//	enumerate docHndl children (e.g. indexes)
 
-	for (idx = 0; idx < docStore->count; idx++) {
-		index = docStore->indexes[idx];
-
-		if (bindHandle(index))
-			btree = btreeIndex(index->map);
-		else
-			return ERROR_arenadropped;
-
-		spec = getObj(index->map, btree->keySpec);
-		keyLen = keyGenerator(key, obj, objSize, spec + 1, spec->size);
-
-		store64(key + keyLen, docId.bits);
-		keyLen += sizeof(uint64_t);
-
-		stat = btreeInsertKey(index, key, keyLen, 0, Btree_indexed);
-		releaseHandle(index);
-	}
+	installIndexKeys(docHndl, doc);
 
 	if (txn)
-		addIdToTxn(docStore->hndl->map->db, txn, docId, addDoc); 
+		addIdToTxn(docHndl->hndl->map->db, txn, docId, addDoc); 
 
-	releaseHandle(docStore->hndl);
+	releaseHandle(docHndl->hndl);
 	return OK;
 }
 
-int rollbackTxn(void *db, void *txn);
+int rollbackTxn(void *db, uint64_t txnId);
 
-int commitTxn(void *db, void *txn);
+int commitTxn(void *db, uint64_t txnId);
 
 int insertKey(void *hndl, uint8_t *key, uint32_t len) {
 Handle *index = (Handle *)hndl;

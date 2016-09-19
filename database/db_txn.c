@@ -14,7 +14,7 @@ uint64_t beginTxn (Handle *database) {
 ObjId txnId;
 Txn *txn;
 
-	txnId.bits = allocObjId(database->map, database->list);
+	txnId.bits = allocObjId(database->map, database->list, 0);
 	txn = fetchIdSlot(database->map, txnId);
 	txn->timestamp = allocateTimestamp(database->map, en_reader);
 	return txnId.bits;

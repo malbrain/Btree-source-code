@@ -2,6 +2,7 @@
 #include <string.h>
 
 #include "db.h"
+#include "db_map.h"
 #include "db_api.h"
 
 #ifndef unix

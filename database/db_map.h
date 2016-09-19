@@ -3,20 +3,21 @@
 #define MUTEX_BIT  0x1
 #define DEAD_BIT   0x2
 
-#include "db_malloc.h"
-#include "db_object.h"
-#include "db_lock.h"
-
 typedef struct ArenaDef_ ArenaDef;
 typedef struct PathStk_ PathStk;
+
+#include "db_malloc.h"
+#include "db_object.h"
+#include "db_redblack.h"
 
 /**
  * open/create arenas
  */
 
-DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk);
+DbMap *createMap(Handle *hndl, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk);
 DbMap *openMap(DbMap *parent, char *name, uint32_t nameLen, ArenaDef *arena);
-DbMap *arenaMap(DbMap *parent, char *name, uint32_t nameLen, PathStk *path);
+DbMap *arenaMap(Handle *hndl, char *name, uint32_t nameLen, PathStk *path);
+DbMap *arenaRbMap(Handle *hndl, RedBlack *entry);
 void closeMap(DbMap *map);
 
 /**
@@ -26,7 +27,7 @@ void closeMap(DbMap *map);
 uint64_t allocMap(DbMap *map, uint32_t size);
 uint64_t allocBlk(DbMap *map, uint32_t size, bool zeroit);
 uint64_t allocObj(DbMap *map, DbAddr *free, int type, uint32_t size, bool zeroit);
-uint64_t allocObjId(DbMap *map, FreeList *list);
+uint64_t allocObjId(DbMap *map, FreeList *list, uint16_t idx);
 void *fetchObjSlot (DbMap *map, ObjId objId);
 void *getObj(DbMap *map, DbAddr addr); 
 void freeBlk(DbMap *map, DbAddr *addr);
