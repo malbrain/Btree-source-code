@@ -3,6 +3,8 @@ typedef enum {
 	OK,
 	ERROR_outofmemory,
 	ERROR_handleclosed,
+	ERROR_createdatabase,
+	ERROR_createindex,
 	ERROR_badhandle,
 	ERROR_badrecid,
 	ERROR_endoffile,

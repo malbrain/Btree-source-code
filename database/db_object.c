@@ -98,23 +98,21 @@ uint16_t idx;
 	idx = arrayAlloc(map, array, sizeof(Handle));
 
 	hndl = arrayElement(map, array, idx, sizeof(Handle));
+	hndl->hndlType = *map->arena->type;
 	hndl->arenaIdx = idx;
 	hndl->map = map;
 	return hndl;
 }
 
-//	delete handle
+//	return handle
 
-void deleteHandle(Handle  *hndl) {
+void returnHandle(Handle  *hndl) {
 DbAddr *array = hndl->map->arena->handleArray;
 DbAddr *addr = getObj(hndl->map, *array);
 uint64_t *inUse;
 
-	inUse = getObj(hndl->map, addr[hndl->arenaIdx / 64]);
-
-	// return handle
- 
 	lockLatch(array->latch);
+	inUse = getObj(hndl->map, addr[hndl->arenaIdx / 64]);
 
 	// clear handle in-use bit
 
@@ -125,27 +123,31 @@ uint64_t *inUse;
 //	bind handle for use in API call
 //	return false if arena dropped
 
-bool bindHandle(Handle *hndl) {
+Handle *bindHandle(void **hndlPtr) {
 uint32_t actve;
+Handle *hndl;
+
+	if (!(hndl = *hndlPtr))
+		return NULL;
 
 	if (hndl->status[0] & HANDLE_dead)
-		return false;
+		return NULL;
 
 	//	increment count of active binds
 
 	actve = atomicAdd32(hndl->status, HANDLE_incr);
 
 	if (actve & HANDLE_dead)
-		return releaseHandle(hndl), false;
+		return releaseHandle(hndl), NULL;
 
 	//	is there a DROP request active?
 
 	if (hndl->map->arena->mutex[0] & DEAD_BIT) {
 		atomicOr32(hndl->status, HANDLE_dead);
-		return releaseHandle(hndl), false;
+		return releaseHandle(hndl), NULL;
 	}
 
-	return true;
+	return hndl;
 }
 
 //	release handle binding

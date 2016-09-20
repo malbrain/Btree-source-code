@@ -100,15 +100,16 @@ typedef union {
 } BtreeSlot;
 
 typedef struct {
-	Handle *hndl;		// index handle
-	ObjId objId;		// current cursor object ID
-	BtreePage *page;	// current cursor page
-	uint32_t slotIdx;	// current cache index
+	ObjId objId;		// cursor position object ID
+	BtreePage *page;	// cursor position page buffer
+	uint32_t slotIdx;	// cursor position index
+	DbAddr pageAddr;	// cursor page buffer address
+	void *idx[1];		// index handle
 } BtreeCursor;
 
 #define btreeIndex(index) ((BtreeIndex *)(index->arena + 1))
 
-BtreeCursor *btreeCursor(Handle *hndl);
+BtreeCursor *btreeCursor(Handle *idx);
 uint8_t *btreeCursorKey(BtreeCursor *cursor, uint32_t *len);
 
 uint64_t btreeNewPage (Handle *hndl, uint8_t lvl);

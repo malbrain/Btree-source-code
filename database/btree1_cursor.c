@@ -11,25 +11,32 @@ uint8_t *suffix = (ptr + keypre(ptr) + keylen(ptr) - sizeof(ObjId));
 	return get64(suffix);
 }
 
-BtreeCursor *btreeCursor(Handle *hndl) {
+BtreeCursor *btreeCursor(Handle *index) {
 BtreeCursor *cursor;
 BtreeIndex *btree;
 
-	if (bindHandle(hndl))
-    	btree = btreeIndex(hndl->map);
-	else
-		return NULL;
+    btree = btreeIndex(index->map);
 
 	cursor = db_malloc(sizeof(BtreeCursor), true);
-	cursor->page = getObj(hndl->map, btree->leaf);
+	cursor->page = getObj(index->map, btree->leaf);
+	*cursor->idx = index;
 	cursor->slotIdx = 0;
-	cursor->hndl = hndl;
 	return cursor;
 }
 
-void btreeCloseCursor(BtreeCursor *cursor) {
-	releaseHandle(cursor->hndl);
+int btreeReturnCursor(BtreeCursor *cursor) {
+Handle *index;
+
+	// return cursor page buffer
+
+	if ((index = bindHandle(cursor->idx)))
+		freeNode(index->map, index->list, cursor->pageAddr);
+	else
+		return ERROR_arenadropped;
+
+	releaseHandle(index);
 	db_free(cursor);
+	return OK;
 }
 
 uint8_t *btreeCursorKey(BtreeCursor *cursor, uint32_t *len) {
@@ -44,7 +51,13 @@ bool btreeSeekKey (BtreeCursor *cursor, uint8_t *key, uint32_t keylen) {
 }
 
 uint64_t btreeNextKey (BtreeCursor *cursor) {
-BtreeIndex *btree = btreeIndex(cursor->hndl->map);
+BtreeIndex *btree;
+Handle *index;
+
+	if ((index = bindHandle(cursor->idx)))
+		btree = btreeIndex(index->map);
+	else
+		return 0;
 
 	while (true) {
 	  uint32_t max = cursor->page->cnt;
@@ -59,7 +72,7 @@ BtreeIndex *btree = btreeIndex(cursor->hndl->map);
 		  return btreeObjId(cursor);
 
 	  if (cursor->page->right.bits)
-		cursor->page = getObj(cursor->hndl->map, cursor->page->right);
+		cursor->page = getObj(index->map, cursor->page->right);
 	  else
 		return 0;
 
@@ -68,7 +81,13 @@ BtreeIndex *btree = btreeIndex(cursor->hndl->map);
 }
 
 uint64_t btreePrevKey (BtreeCursor *cursor) {
-BtreeIndex *btree = btreeIndex(cursor->hndl->map);
+BtreeIndex *btree;
+Handle *index;
+
+	if ((index = bindHandle(cursor->idx)))
+		btree = btreeIndex(index->map);
+	else
+		return 0;
 
 	while (true) {
 	  if (cursor->slotIdx) {
@@ -79,7 +98,7 @@ BtreeIndex *btree = btreeIndex(cursor->hndl->map);
 	  }
 
 	  if (cursor->page->left.bits)
-		cursor->page = getObj(cursor->hndl->map, cursor->page->left);
+		cursor->page = getObj(index->map, cursor->page->left);
 	  else
 		return 0;
 

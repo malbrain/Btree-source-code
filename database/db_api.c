@@ -10,7 +10,7 @@ void initialize() {
 	memInit();
 }
 
-void *openDatabase(char *name, uint32_t nameLen, bool onDisk) {
+int openDatabase(void **hndl, char *name, uint32_t nameLen, bool onDisk) {
 ArenaDef arenaDef[1];
 DbMap *map;
 
@@ -22,27 +22,30 @@ DbMap *map;
 	map = openMap(NULL, name, nameLen, arenaDef);
 
 	if (!map)
-		return NULL;
+		return ERROR_createdatabase;
 
-	return makeHandle(map);
+	*hndl = makeHandle(map);
+	return OK;
 }
 
-void *openDocStore(void *hndl, char *path, uint32_t pathLen, bool onDisk) {
-Handle *dbHndl = (Handle *)hndl;
+int openDocStore(void **hndl, void **dbhndl, char *path, uint32_t pathLen, bool onDisk) {
 DocStore *docStore;
 DocHndl *docHndl;
 uint64_t *inUse;
+Handle *dbHndl;
 DataBase *db;
 DbAddr *addr;
 int idx, jdx;
 DbMap *map;
 
+	*hndl = NULL;
+
 	docHndl = db_malloc(sizeof(DocHndl), true);
 
-	if (bindHandle(dbHndl))
+	if ((dbHndl = bindHandle(dbhndl)))
 		db = database(dbHndl->map);
 	else
-		return NULL;
+		return ERROR_arenadropped;
 
 	//  create the docStore and assign database txn idx
 
@@ -51,7 +54,7 @@ DbMap *map;
 	if ((map = createMap(dbHndl, path, pathLen, 0, sizeof(DocStore), sizeof(ObjId), 0, onDisk)))
 		docStore = docstore(map);
 	else
-		return NULL;
+		return ERROR_arenadropped;
 
 	if (!docStore->init) {
 		docStore->docIdx = arrayAlloc(dbHndl->map, db->txnIdx, sizeof(uint64_t));
@@ -64,7 +67,8 @@ DbMap *map;
 	docHndl->hndl = makeHandle(map);
 
 	unlockLatch(dbHndl->map->arenaDef->nameTree->latch);
-	return docHndl;
+	*hndl = docHndl;
+	return OK;
 }
 
 //  open and install index map in docHndl cache
@@ -123,12 +127,17 @@ int idx;
 	readUnlock2 (arenaDef->idList->lock);
 }
 
-void *createIndex(void *hndl, char *name, uint32_t nameLen, void *keySpec, uint16_t specSize, int bits, int xtra, bool onDisk) {
-DocHndl *docHndl = hndl;
+int createIndex(void **hndl, void **dochndl, char *name, uint32_t nameLen, void *keySpec, uint16_t specSize, int bits, int xtra, bool onDisk) {
 BtreeIndex *btree;
+DocHndl *docHndl;
 Handle *index;
 Object *obj;
 DbMap *map;
+
+	*hndl = NULL;
+
+	if (!(docHndl = *dochndl))
+		return ERROR_arenadropped;
 
 	if (bits > Btree_maxbits) {
 		fprintf(stderr, "createIndex: bits = %d > max = %d\n", bits, Btree_maxbits);
@@ -140,24 +149,21 @@ DbMap *map;
 		exit(1);
 	}
 
-	if (bindHandle(docHndl->hndl)) {
-		lockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
-		map = createMap(docHndl->hndl, name, nameLen, 0, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
-	} else
-		return NULL;
+	lockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
+	map = createMap(docHndl->hndl, name, nameLen, 0, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
 
 	if (!map) {
 		unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
-		return NULL;
+		return ERROR_createindex;
 	}
 
 	index = makeHandle(map);
 
-	if (bindHandle(index))
+	if (bindHandle((void **)&index))
 		btree = btreeIndex(map);
 	else {
 		unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
-		return NULL;
+		return ERROR_arenadropped;
 	}
 
 	if (!btree->keySpec.addr) {
@@ -178,26 +184,61 @@ DbMap *map;
 
 	releaseHandle(index);
 	releaseHandle(docHndl->hndl);
-	return index;
+	*hndl = index;
+	return OK;
 }
 
-void *createCursor(void *index) {
-	return (void *)btreeCursor((Handle *)index);
+//	create new cursor
+
+int createCursor(void **hndl, void **idxhndl) {
+BtreeCursor *cursor;
+Handle *index;
+
+	if ((index = bindHandle(idxhndl)))
+		cursor = btreeCursor(index);
+	else
+		return ERROR_arenadropped;
+
+	releaseHandle(index);
+	*hndl = cursor;
+	return OK;
 }
 
-void *cloneHandle(void *hndl) {
-	return (void *)makeHandle(((Handle *)hndl)->map);
+int returnCursor(void **hndl) {
+BtreeCursor *cursor;
+Handle *index;
+
+	if (!(cursor = *hndl))
+		return ERROR_handleclosed;
+
+	btreeReturnCursor(cursor);
+	*hndl = NULL;
+	return OK;
+}
+
+int cloneHandle(void **newhndl, void **oldhndl) {
+Handle *hndl;
+
+	if ((hndl = bindHandle(oldhndl))) {
+		*newhndl = makeHandle(hndl->map);
+		return OK;
+	}
+
+	return ERROR_handleclosed;
 }
 
 int installIndexKey(DocHndl *docHndl, SkipEntry *entry, void *obj, uint32_t objSize, ObjId docId) {
-Handle *index = (Handle *)(*entry->val);
 uint8_t key[MAX_key];
 BtreeIndex *btree;
+void *hndl[1];
+Handle *index;
 Object *spec;
 int keyLen;
 int stat;
 
-	if (bindHandle(index))
+	*hndl = (Handle *)(*entry->val);
+
+	if (index = bindHandle(hndl))
 		btree = btreeIndex(index->map);
 	else
 		return ERROR_arenadropped;
@@ -239,32 +280,36 @@ int idx, stat;
 	return OK;
 }
 
-int addDocument(void *hndl, void *obj, uint32_t objSize, uint64_t *result, ObjId txnId) {
-DocHndl *docHndl = hndl;
+int addDocument(void **dochndl, void *obj, uint32_t objSize, uint64_t *result, ObjId txnId) {
 DocStore *docStore;
 ArenaDef *arenaDef;
+DocHndl *docHndl;
 Status stat = OK;
 Txn *txn = NULL;
 Document *doc;
 DbAddr *slot;
+Handle *hndl;
 ObjId docId;
 DbAddr addr;
 int idx;
 
-	if (!bindHandle(docHndl->hndl))
+	if (!(docHndl = *dochndl))
+		return ERROR_handleclosed;
+
+	if (!(hndl = bindHandle((void **)&docHndl->hndl)))
 		return ERROR_arenadropped;
 
-	docStore = docstore(docHndl->hndl->map);
+	docStore = docstore(hndl->map);
 
 	if (txnId.bits)
-		txn = fetchIdSlot(docHndl->hndl->map->db, txnId);
+		txn = fetchIdSlot(hndl->map->db, txnId);
 
-	if ((addr.bits = allocNode(docHndl->hndl->map, docHndl->hndl->list, -1, objSize + sizeof(Document), false)))
-		doc = getObj(docHndl->hndl->map, addr);
+	if ((addr.bits = allocNode(hndl->map, hndl->list, -1, objSize + sizeof(Document), false)))
+		doc = getObj(hndl->map, addr);
 	else
 		return ERROR_outofmemory;
 
-	docId.bits = allocObjId(docHndl->hndl->map, docHndl->hndl->list, docStore->docIdx);
+	docId.bits = allocObjId(hndl->map, hndl->list, docStore->docIdx);
 
 	memset (doc, 0, sizeof(Document));
 
@@ -281,7 +326,7 @@ int idx;
 
 	// assign document to docId slot
 
-	slot = fetchIdSlot(docHndl->hndl->map, docId);
+	slot = fetchIdSlot(hndl->map, docId);
 	slot->bits = addr.bits;
 
 	//  install any recent index arrivals from another process/thread
@@ -294,21 +339,21 @@ int idx;
 	installIndexKeys(docHndl, doc);
 
 	if (txn)
-		addIdToTxn(docHndl->hndl->map->db, txn, docId, addDoc); 
+		addIdToTxn(hndl->map->db, txn, docId, addDoc); 
 
-	releaseHandle(docHndl->hndl);
+	releaseHandle(hndl);
 	return OK;
 }
 
-int rollbackTxn(void *db, uint64_t txnId);
+int rollbackTxn(void **hndl, uint64_t txnId);
 
-int commitTxn(void *db, uint64_t txnId);
+int commitTxn(void **hndl, uint64_t txnId);
 
-int insertKey(void *hndl, uint8_t *key, uint32_t len) {
-Handle *index = (Handle *)hndl;
+int insertKey(void **hndl, uint8_t *key, uint32_t len) {
+Handle *index;
 int stat;
 
-	if (bindHandle(index))
+	if ((index = bindHandle(hndl)))
 		stat = btreeInsertKey(index, key, len, 0, Btree_indexed);
 	else
 		return ERROR_arenadropped;

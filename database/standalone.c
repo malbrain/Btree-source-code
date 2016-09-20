@@ -110,7 +110,7 @@ typedef struct {
 	char idx;
 	char *type;
 	char *infile;
-	void *database;
+	void **database;
 	int bits, xtra, onDisk;
 	int num;
 } ThreadArg;
@@ -129,16 +129,16 @@ int ch, len = 0, slot, type = 0;
 unsigned char key[4096];
 ThreadArg *args = arg;
 KeySpec keySpec[1];
+void *docStore[1];
+void *index[1];
 uint64_t objId;
-void *docStore;
 ObjId txnId;
-void *index;
 int stat;
 FILE *in;
 
 	txnId.bits = 0;
 
-	docStore = openDocStore(args->database, "documents", strlen("documents"), args->onDisk);
+	openDocStore(docStore, args->database, "documents", strlen("documents"), args->onDisk);
 
 	if( args->idx < strlen (args->type) )
 		ch = args->type[args->idx];
@@ -161,7 +161,7 @@ FILE *in;
 
 		keySpec->type = pennySort;
 
-		index = createIndex(docStore, "index0", strlen("index0"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
+		createIndex(index, docStore, "index0", strlen("index0"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
 
 		if( in = fopen (args->infile, "rb") )
 		  while( ch = getc(in), ch != EOF )
@@ -190,7 +190,7 @@ FILE *in;
 
 		keySpec->type = wholeRec;
 
-		index = createIndex(docStore, "index1", strlen("index1"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
+		createIndex(index, docStore, "index1", strlen("index1"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
 
 		if( in = fopen (args->infile, "r") )
 		  while( ch = getc(in), ch != EOF )
@@ -336,9 +336,9 @@ float elapsed;
 int num = 0;
 char key[1];
 bool onDisk = true;
-void *database;
-void *docStore;
-void *index;
+void *database[1];
+void *docStore[1];
+void *index[1];
 
 #ifdef _WIN32
 	GetSystemInfo(info);
@@ -376,7 +376,7 @@ void *index;
 #endif
 	args = malloc (cnt * sizeof(ThreadArg));
 
-	database = openDatabase(argv[1], strlen(argv[1]), onDisk);
+	openDatabase(database, argv[1], strlen(argv[1]), onDisk);
 
 	//	fire off threads
 

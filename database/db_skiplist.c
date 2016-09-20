@@ -91,7 +91,7 @@ SkipEntry *entry;
 
 //	Push new maximal key onto head of skip list
 
-void skipPush(Handle *hndl, DbAddr *skip, uint64_t key, uint64_t val) {
+void *skipPush(Handle *hndl, DbAddr *skip, uint64_t key) {
 SkipList *skipList;
 SkipEntry *entry;
 uint64_t next;
@@ -105,7 +105,7 @@ uint64_t next;
 
 	entry = skipList->array + skip->nslot++;
 	*entry->key = key;
-	*entry->val = val;
+	return entry;
 }
 
 //	Add new key to skip list

@@ -93,7 +93,7 @@ DbAddr *rbAddr;
 	map = openMap(parent, name, nameLen, arenaDef);
 
 	writeLock2(parent->childMaps->lock);
-	catalog = skipAdd(hndl, parent->childMaps->head, arenaDef->id);
+	catalog = skipPush(hndl, parent->childMaps->head, arenaDef->id);
 	*catalog = map;
 
 	writeUnlock2(parent->childMaps->lock);
@@ -533,7 +533,9 @@ DbAddr slot;
 
 void freeNode(DbMap *map, FreeList *list, DbAddr slot) {
 	addSlotToFrame(map, list[slot.type].free, slot.bits);
+#ifdef DEBUG
 	atomicAdd32(&Used, -1);
+#endif
 }
 
 //

@@ -25,6 +25,7 @@ struct Handle_ {
 	DbMap *map;			// pointer to map
 	uint32_t status[1];	// active entry count/dead status
 	uint16_t arenaIdx;	// arena handle table entry index
+	uint16_t hndlType;	// type of arena map
 	FreeList list[MaxObjType];
 };
 
@@ -89,7 +90,7 @@ void store64(uint8_t *to, uint64_t what);
 void closeHandle(Handle  *hndl);
 Handle *makeHandle(DbMap *map);
 
-bool bindHandle(Handle *hndl);
+Handle *bindHandle(void **hndl);
 void releaseHandle(Handle *hndl);
 
 void *arrayElement(DbMap *map, DbAddr *array, uint16_t idx, size_t size);
@@ -98,6 +99,6 @@ void arrayExpand(DbMap *map, DbAddr *array, size_t size, uint16_t idx);
 uint16_t arrayAlloc(DbMap *map, DbAddr *array, size_t size);
 
 SkipEntry *skipFind(Handle *hndl, DbAddr *skip, uint64_t key);
-void skipPush(Handle *hndl, DbAddr *skip, uint64_t key, uint64_t val);
+void *skipPush(Handle *hndl, DbAddr *skip, uint64_t key);
 void *skipAdd(Handle *hndl, DbAddr *skip, uint64_t key);
 void skipDel(Handle *hndl, DbAddr *skip, uint64_t key);
