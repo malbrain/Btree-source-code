@@ -51,7 +51,7 @@ DbMap *map;
 
 	lockLatch(dbHndl->map->arenaDef->nameTree->latch);
 
-	if ((map = createMap(dbHndl, path, pathLen, 0, sizeof(DocStore), sizeof(ObjId), 0, onDisk)))
+	if ((map = createMap(dbHndl->map, path, pathLen, 0, sizeof(DocStore), sizeof(ObjId), 0, onDisk)))
 		docStore = docstore(map);
 	else
 		return ERROR_arenadropped;
@@ -82,8 +82,8 @@ Handle **hndl;
 	rbAddr.bits = *skipEntry->val;
 	rbEntry = getObj(docHndl->hndl->map->parent, rbAddr);
 
-	index = makeHandle(arenaRbMap(docHndl->hndl, rbEntry));
-	hndl = skipAdd(docHndl->hndl, docHndl->indexes->head, *skipEntry->key);
+	index = makeHandle(arenaRbMap(docHndl->hndl->map, rbEntry));
+	hndl = skipAdd(docHndl->hndl->map, docHndl->indexes->head, *skipEntry->key);
 	*hndl = index;
 }
 
@@ -150,7 +150,7 @@ DbMap *map;
 	}
 
 	lockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
-	map = createMap(docHndl->hndl, name, nameLen, 0, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
+	map = createMap(docHndl->hndl->map, name, nameLen, 0, sizeof(BtreeIndex), sizeof(ObjId), 0, onDisk);
 
 	if (!map) {
 		unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);

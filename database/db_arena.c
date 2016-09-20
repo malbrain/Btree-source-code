@@ -23,14 +23,14 @@ void mapAll (DbMap *map);
 
 //	open map given red/black entry
 
-DbMap *arenaRbMap(Handle *hndl, RedBlack *entry) {
-DbMap *parent = hndl->map, **catalog, *map;
+DbMap *arenaRbMap(DbMap *parent, RedBlack *entry) {
+DbMap **catalog, *map;
 ArenaDef *arenaDef;
 
 	arenaDef = rbPayload(entry);
 
 	writeLock2(parent->childMaps->lock);
-	catalog = skipAdd(hndl, parent->childMaps->head, arenaDef->id);
+	catalog = skipAdd(parent, parent->childMaps->head, arenaDef->id);
 
 	//  open it
 
@@ -45,15 +45,14 @@ ArenaDef *arenaDef;
 // return existing arena from parent's child list or NULL
 //	call with parent nameTree r/b tree locked
 
-DbMap *arenaMap(Handle *hndl, char *name, uint32_t nameLen, PathStk *path) {
-DbMap *parent = hndl->map;
+DbMap *arenaMap(DbMap *parent, char *name, uint32_t nameLen, PathStk *path) {
 DbMap *db = parent->db;
 RedBlack *entry;
 
 	//	see if this arena map has already been opened in our process
 
 	if ((entry = rbFind(db, parent->arenaDef->nameTree, name, nameLen, path)))
-	  return arenaRbMap(hndl, entry);
+	  return arenaRbMap(parent, entry);
 
 	return NULL;
 }
@@ -61,9 +60,8 @@ RedBlack *entry;
 //  open/create arena
 //	call with parent's nameTree r/b tree locked
 
-DbMap *createMap(Handle *hndl, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
-DbMap *map, *db = hndl->map->db;
-DbMap *parent = hndl->map;
+DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
+DbMap *map, *db = parent->db;
 ArenaDef *arenaDef;
 DbMap **catalog;
 PathStk path[1];
@@ -73,7 +71,7 @@ DbAddr *rbAddr;
 	//	see if this arena ArenaDef already exists
 
 	if ((entry = rbFind(db, parent->arenaDef->nameTree, name, nameLen, path)))
-		return arenaRbMap(hndl, entry);
+		return arenaRbMap(parent, entry);
 
 	// otherwise, create new database ArenaDef entry
 
@@ -93,7 +91,7 @@ DbAddr *rbAddr;
 	map = openMap(parent, name, nameLen, arenaDef);
 
 	writeLock2(parent->childMaps->lock);
-	catalog = skipPush(hndl, parent->childMaps->head, arenaDef->id);
+	catalog = skipPush(parent, parent->childMaps->head, arenaDef->id);
 	*catalog = map;
 
 	writeUnlock2(parent->childMaps->lock);
@@ -105,7 +103,7 @@ DbAddr *rbAddr;
 	//	add arenaId to child idList
 
 	writeLock2(parent->arenaDef->idList->lock);
-	rbAddr = skipAdd (hndl, parent->arenaDef->idList->head, arenaDef->id);
+	rbAddr = skipAdd (parent, parent->arenaDef->idList->head, arenaDef->id);
 	rbAddr->bits = entry->addr.bits;
 	writeUnlock2(parent->arenaDef->idList->lock);
 	return map;

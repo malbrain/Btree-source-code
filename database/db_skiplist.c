@@ -23,13 +23,13 @@ int low = 0, diff;
 
 //	find key value in skiplist, return entry address
 
-SkipEntry *skipFind(Handle *hndl, DbAddr *skip, uint64_t key) {
+SkipEntry *skipFind(DbMap *map, DbAddr *skip, uint64_t key) {
 DbAddr *next = skip;
 SkipList *skipList;
 SkipEntry *entry;
 
   while (next->addr) {
-	skipList = getObj(hndl->map, *next);
+	skipList = getObj(map, *next);
 
 	if (*skipList->array->key <= key) {
 	  entry = skipSearch(skipList, next->nslot, key);
@@ -48,14 +48,14 @@ SkipEntry *entry;
 
 //	remove key from skip list
 
-void skipDel(Handle *hndl, DbAddr *skip, uint64_t key) {
+void skipDel(DbMap *map, DbAddr *skip, uint64_t key) {
 SkipList *skipList = NULL, *prevList;
 DbAddr *next = skip;
 SkipEntry *entry;
 
   while (next->addr) {
 	prevList = skipList;
-	skipList = getObj(hndl->map, *next);
+	skipList = getObj(map, *next);
 
 	if (*skipList->array->key <= key) {
 	  entry = skipSearch(skipList, next->nslot, key);
@@ -81,7 +81,7 @@ SkipEntry *entry;
 	  else
 		skip->bits = skipList->next->bits;
 
-	  freeNode(hndl->map, hndl->list, *next);
+	  freeBlk(map, next);
 	  return;
 	}
 
@@ -91,15 +91,15 @@ SkipEntry *entry;
 
 //	Push new maximal key onto head of skip list
 
-void *skipPush(Handle *hndl, DbAddr *skip, uint64_t key) {
+void *skipPush(DbMap *map, DbAddr *skip, uint64_t key) {
 SkipList *skipList;
 SkipEntry *entry;
 uint64_t next;
 
 	if (!skip->addr || skip->nslot == SKIP_node) {
 		next = skip->bits;
-		skip->bits = allocNode(hndl->map, hndl->list, SkipType, sizeof(SkipList), true);
-		skipList = getObj(hndl->map, *skip);
+		skip->bits = allocBlk(map, sizeof(SkipList), true);
+		skipList = getObj(map, *skip);
 		skipList->next->bits = next;
 	}
 
@@ -111,7 +111,7 @@ uint64_t next;
 //	Add new key to skip list
 //	return val address
 
-void *skipAdd(Handle *hndl, DbAddr *skip, uint64_t key) {
+void *skipAdd(DbMap *map, DbAddr *skip, uint64_t key) {
 SkipList *skipList = NULL, *nextList;
 DbAddr *next = skip;
 uint64_t prevBits;
@@ -119,7 +119,7 @@ SkipEntry *entry;
 int min, max;
 
   while (next->addr) {
-	skipList = getObj(hndl->map, *next);
+	skipList = getObj(map, *next);
 
 	//  find skipList node that covers key
 
@@ -144,9 +144,9 @@ int min, max;
 
 	if (next->nslot == SKIP_node) {
 	  prevBits = skipList->next->bits;
-	  skipList->next->bits = allocNode(hndl->map, hndl->list, SkipType, sizeof(SkipList), true);
+	  skipList->next->bits = allocBlk(map, sizeof(SkipList), true);
 
-	  nextList = getObj(hndl->map, *skipList->next);
+	  nextList = getObj(map, *skipList->next);
 	  nextList->next->bits = prevBits;
 	  memcpy(nextList->array, skipList->array + SKIP_node / 2, sizeof(SkipList) * (SKIP_node - SKIP_node / 2));
 
@@ -167,8 +167,8 @@ int min, max;
 
   // initialize empty list
 
-  skip->bits = allocNode(hndl->map, hndl->list, SkipType, sizeof(SkipList), true);
-  skipList = getObj(hndl->map, *skip);
+  skip->bits = allocBlk(map, sizeof(SkipList), true);
+  skipList = getObj(map, *skip);
 
   *skipList->array->key = key;
   skip->nslot = 1;
