@@ -156,28 +156,48 @@ void releaseHandle(Handle *hndl) {
 	atomicAdd32(hndl->status, -HANDLE_incr);
 }
 
-//	get 64 bit suffix value
+//	peel off 64 bit suffix value from key
+//	return number of key bytes remaining
 
-uint64_t get64(uint8_t *from) {
-uint64_t result = 0;
-int idx;
+uint32_t get64(uint8_t *key, uint32_t len, uint64_t *result) {
+uint32_t xtrabytes = key[len - 1] & 0x7;
+int idx = 0;
 
-	for (idx = 0; idx < sizeof(uint64_t); idx++) {
-		result <<= 8;
-		result |= from[idx];
+	len -= xtrabytes + 2;
+	*result = key[len] & 0x1f;
+
+	while (idx++ < xtrabytes) {
+	  *result <<= 8;
+	  *result |= key[len + idx];
 	}
-	return result;
+
+	*result <<= 5;
+	*result |= key[len + idx] >> 3;
+	return len;
 }
 
-//  fill in 64 bit suffix value
+// concatenate key with 64 bit value
+// returns length of concatenated key
 
-void store64(uint8_t *where, uint64_t what) {
-int idx = sizeof(uint64_t);
+uint32_t store64(uint8_t *key, uint32_t keylen, uint64_t recId) {
+uint64_t tst64 = recId >> 10;
+uint32_t xtrabytes = 0;
+uint32_t idx;
 
-	while (idx--) {
-		where[idx] = what & 0xff;
-		what >>= 8;
-	}
+	while (tst64)
+		xtrabytes++, tst64 >>= 8;
+
+    key[keylen + xtrabytes + 1] = (recId & 0x1f) << 3 | xtrabytes;
+
+    recId >>= 5;
+
+    for (idx = xtrabytes; idx; idx--) {
+        key[keylen + idx] = (recId & 0xff);
+        recId >>= 8;
+    }
+
+    key[keylen] = recId | (xtrabytes << 5);
+    return keylen + xtrabytes + 2;
 }
 
 //	allocate a new timestamp

@@ -65,8 +65,8 @@ typedef struct {
 } BtreePage;
 
 typedef struct {
-	DbAddr pageNo;		// current page address
-	BtreePage *page;	// selected page
+	DbAddr pageNo;		// current page addr
+	BtreePage *page;	// current page address
 	uint32_t slotIdx;	// slot on page
 } BtreeSet;
 

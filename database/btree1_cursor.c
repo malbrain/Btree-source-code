@@ -6,19 +6,28 @@
 
 uint64_t btreeObjId(BtreeCursor *cursor) {
 uint8_t *ptr = keyptr(cursor->page, cursor->slotIdx);
-uint8_t *suffix = (ptr + keypre(ptr) + keylen(ptr) - sizeof(ObjId));
+uint64_t result;
 
-	return get64(suffix);
+	get64(ptr + keypre(ptr), keylen(ptr), &result);
+	return result;
 }
 
 BtreeCursor *btreeCursor(Handle *index) {
 BtreeCursor *cursor;
 BtreeIndex *btree;
+BtreePage *first;
 
     btree = btreeIndex(index->map);
 
 	cursor = db_malloc(sizeof(BtreeCursor), true);
-	cursor->page = getObj(index->map, btree->leaf);
+	cursor->pageAddr.bits = btreeNewPage(index, 0);
+	cursor->page = getObj(index->map, cursor->pageAddr);
+
+	first = getObj(index->map, btree->leaf);
+	btreeLockPage (first, Btree_lockRead);
+	memcpy(cursor->page, first, btree->pageSize);
+	btreeUnlockPage (first, Btree_lockRead);
+
 	*cursor->idx = index;
 	cursor->slotIdx = 0;
 	return cursor;

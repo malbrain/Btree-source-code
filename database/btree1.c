@@ -80,8 +80,7 @@ uint8_t *buff;
 	//  set up stopper key
 
 	buff = keyaddr(page, page->min);
-	buff[0] = sizeof(uint64_t);
-	store64(buff + 1, btree->leaf.bits);
+	buff[0] = store64(buff + 1, 0, btree->leaf.bits);
 
 	//  set up slot
 

@@ -27,4 +27,4 @@ int commitTxn(void **database, uint64_t txnId);
 
 int addDocument(void **hndl, void *obj, uint32_t objSize, uint64_t *objId, ObjId txnId);
 int insertKey(void **index, uint8_t *key, uint32_t len);
-int addObjId(uint8_t *key, uint64_t addr);
+uint32_t addObjId(uint8_t *key, uint32_t len, uint64_t addr);

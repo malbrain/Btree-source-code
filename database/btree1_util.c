@@ -33,12 +33,14 @@ uint8_t *btreeAddr(BtreePage *page, uint32_t off)
 uint32_t Splits;
 
 // split the root and raise the height of the btree
+// call with key for smaller half and right page addr.
 
 Status btreeSplitRoot(Handle *hndl, BtreeSet *root, DbAddr right, uint8_t *leftKey) {
 BtreeIndex *btree = btreeIndex(hndl->map);
-uint32_t totLen, nxt = btree->pageSize;
+uint32_t keyLen, nxt = btree->pageSize;
 BtreePage *leftPage, *rightPage;
 BtreeSlot *slot;
+uint64_t result;
 uint8_t *ptr;
 Status stat;
 DbAddr left;
@@ -63,7 +65,8 @@ DbAddr left;
 
 	memset(root->page+1, 0, btree->pageSize - sizeof(*root->page));
 
-	// insert stopper key of root page
+	// insert stopper key on root page
+	// pointing to right half page 
 	// and increase the root height
 
 	nxt -= 1 + sizeof(uint64_t);
@@ -72,20 +75,24 @@ DbAddr left;
 	slot->off = nxt;
 
 	ptr = keyaddr(root->page, nxt);
-	ptr[0] = sizeof(uint64_t);
-	store64(ptr + 1, right.bits);
+	ptr[0] = store64(ptr + 1, 0, right.bits);
 
-	// insert lower keys page fence key on newroot page as first key
+	// insert lower keys (left) fence key on newroot page as first key
+	// reserve space for maximum sized key.
 
-	totLen = keylen(leftKey) + keypre(leftKey);
-	store64(leftKey + totLen - sizeof(uint64_t), left.bits);
-	nxt -= totLen;
+	keyLen = get64(leftKey + keypre(leftKey), keylen(leftKey), &result);
+	nxt -= keyLen + sizeof(uint64_t) + 2;
 
 	slot = slotptr(root->page, 1);
 	slot->type = Btree_indexed;
 	slot->off = nxt;
 
-	memcpy (keyaddr(root->page, nxt), leftKey, totLen);
+	//	construct lower (left) page key
+
+	ptr = keyaddr(root->page, nxt);
+	memcpy (ptr + 2, leftKey + keypre(leftKey), keyLen);
+	keyLen = store64(ptr + 2, keyLen, left.bits);
+	ptr[0] = keyLen / 256 | 0x80, ptr[1] = keyLen;
 	
 	root->page->right.bits = 0;
 	root->page->min = nxt;
@@ -105,14 +112,14 @@ DbAddr left;
 Status btreeSplitPage (Handle *hndl, BtreeSet *set) {
 uint8_t leftKey[Btree_maxkey], rightKey[Btree_maxkey];
 BtreeIndex *btree = btreeIndex(hndl->map);
-uint32_t cnt = 0, idx = 0, max, nxt;
+uint32_t cnt = 0, idx = 0, max, nxt, off;
 BtreeSlot librarian, *source, *dest;
 BtreePageType type = Btree_leafPage;
 uint32_t size = btree->pageSize;
 BtreePage *frame, *rightPage;
 uint8_t lvl = set->page->lvl;
+uint32_t totLen, keyLen;
 DbAddr right, addr;
-uint32_t totLen;
 uint8_t *key;
 bool stopper;
 Status stat;
@@ -178,20 +185,24 @@ Status stat;
 	stopper = dest->type == Btree_stopper;
 
 	if( set->page->lvl)
-		memcpy (rightKey, key, totLen);
-	else {
-		totLen = keylen(key) + sizeof(uint64_t);
+		keyLen = keylen(key) - 2 - (key[totLen - 1] & 0x7);	// strip off pageNo
+	else
+		keyLen = keylen(key);	// length w/o pageNo
 
-		if( totLen < 128 )
-			rightKey[0] = totLen;
-		else
-			rightKey[0] = totLen / 256 | 0x80, rightKey[1] = totLen;
+	if( keyLen + sizeof(uint64_t) < 128 )
+		off = 1;
+	else
+		off = 2;
 
-		totLen += keypre(rightKey);
-		memcpy (rightKey + keypre(rightKey), key + keypre(key), keylen(key));
-	}
+	//	copy key and add pageNo
 
-	store64(rightKey + totLen - sizeof(uint64_t), right.bits);
+	memcpy (rightKey + off, key + keypre(key), keyLen);
+	keyLen = store64(rightKey + off, keyLen, right.bits);
+
+	if (off == 1)
+		rightKey[0] = keyLen;
+	else
+		rightKey[0] = keyLen / 256 | 0x80, rightKey[1] = keyLen;
 
 	rightPage->min = nxt;
 	rightPage->cnt = idx;
@@ -274,20 +285,24 @@ Status stat;
 	//	the left page number.
 
 	if( set->page->lvl)
-		memcpy (leftKey, key, totLen);
-	else {
-		totLen = keylen(key) + sizeof(uint64_t);
+		keyLen = keylen(key) - 2 - (key[totLen - 1] & 0x7);	// strip off pageNo
+	else
+		keyLen = keylen(key);	// length w/o pageNo
 
-		if( totLen < 128 )
-			leftKey[0] = totLen;
-		else
-			leftKey[0] = totLen / 256 | 0x80, leftKey[1] = totLen;
+	if( keyLen + sizeof(uint64_t) < 128 )
+		off = 1;
+	else
+		off = 2;
 
-		totLen += keypre(leftKey);
-		memcpy (leftKey + keypre(leftKey), key + keypre(key), keylen(key));
-	}
+	//	copy key and add pageNo
 
-	store64(leftKey + totLen - sizeof(uint64_t), set->pageNo.bits);
+	memcpy (leftKey + off, key + keypre(key), keyLen);
+	keyLen = store64(leftKey + off, keyLen, set->pageNo.bits);
+
+	if (off == 1)
+		leftKey[0] = keyLen;
+	else
+		leftKey[0] = keyLen / 256 | 0x80, leftKey[1] = keyLen;
 
 	//  return temporary frame
 
@@ -563,7 +578,7 @@ DbAddr prevPageNo;
 	  assert(drill > 0);
 	  drill--;
 	  ptr = keyptr(set->page, set->slotIdx);
-	  set->pageNo.bits = get64(ptr + keypre(ptr) + keylen(ptr) - sizeof(uint64_t));
+	  get64(ptr + keypre(ptr), keylen(ptr), &set->pageNo.bits);
 	  continue;
 	 }
 

@@ -202,7 +202,7 @@ FILE *in;
 #endif
 			  line++;
 
-			  len += addObjId(key + len, line);
+			  len = addObjId(key, len, line);
 			  if ((stat = insertKey(index, key, len)))
 				  fprintf(stderr, "Key Error %d Line: %d\n", stat, line), exit(0);
 			  len = 0;

@@ -216,6 +216,17 @@ Handle *index;
 	return OK;
 }
 
+//	iterate cursor to next document
+/*
+int nextCursorDoc(void **hndl) {
+BtreeCursor *cursor;
+
+	if ((cursor = *hndl))
+		docId = btreeNextKey(cursor);
+	else
+		return ERROR_handleclosed;
+}
+*/
 int cloneHandle(void **newhndl, void **oldhndl) {
 Handle *hndl;
 
@@ -246,8 +257,7 @@ int stat;
 	spec = getObj(index->map, btree->keySpec);
 	keyLen = keyGenerator(key, obj, objSize, spec + 1, spec->size);
 
-	store64(key + keyLen, docId.bits);
-	keyLen += sizeof(uint64_t);
+	keyLen = store64(key, keyLen, docId.bits);
 
 	stat = btreeInsertKey(index, key, keyLen, 0, Btree_indexed);
 	releaseHandle(index);
@@ -362,7 +372,6 @@ int stat;
 	return stat;
 }
 
-int addObjId(uint8_t *key, uint64_t addr) {
-	store64(key, addr);
-	return sizeof(uint64_t);
+uint32_t addObjId(uint8_t *key, uint32_t len, uint64_t addr) {
+	return store64(key, len, addr);
 }
