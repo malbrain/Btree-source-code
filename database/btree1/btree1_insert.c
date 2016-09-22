@@ -1,6 +1,6 @@
-#include "db.h"
-#include "db_object.h"
-#include "db_map.h"
+#include "../db.h"
+#include "../db_object.h"
+#include "../db_map.h"
 #include "btree1.h"
 
 Status btreeInsertSlot (Handle *hndl, BtreeSet *set, uint8_t *key, uint32_t keyLen, BtreeSlotType type);

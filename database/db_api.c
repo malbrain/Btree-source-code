@@ -4,7 +4,7 @@
 #include "db_arena.h"
 #include "db_map.h"
 #include "db_api.h"
-#include "btree1.h"
+#include "btree1/btree1.h"
 
 void initialize() {
 	memInit();
