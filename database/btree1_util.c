@@ -83,12 +83,12 @@ DbAddr left;
 
 	keyLen = keylen(leftKey);
 
-	if (keyLen + sizeof(uint64_t) < 128)
+	if (keyLen < 128)
 		off = 1;
 	else
 		off = 2;
 
-	nxt -= keyLen + sizeof(uint64_t) + off;
+	nxt -= keyLen + off;
 	slot = slotptr(root->page, 1);
 	slot->type = Btree_indexed;
 	slot->off = nxt;
@@ -96,9 +96,8 @@ DbAddr left;
 	//	construct lower (left) page key
 
 	ptr = keyaddr(root->page, nxt);
-	memcpy (ptr + off, leftKey + keypre(leftKey), keyLen);
-	btreePutPageNo(ptr + off, keyLen, left.bits);
-	keyLen += sizeof(uint64_t);
+	memcpy (ptr + off, leftKey + keypre(leftKey), keyLen - sizeof(uint64_t));
+	btreePutPageNo(ptr + off, keyLen - sizeof(uint64_t), left.bits);
 
 	if (off == 1)
 		ptr[0] = keyLen;

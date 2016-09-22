@@ -61,7 +61,10 @@ Status stat;
 
 	// update child pageNo
 
-	memcpy(ptr + keypre(ptr) + keylen(ptr) - sizeof(uint64_t), fenceKey + keypre(fenceKey) + keylen(fenceKey) - sizeof(uint64_t), sizeof(uint64_t));
+	assert(!memcmp(ptr, fenceKey, keyLen + keypre(fenceKey) - sizeof(uint64_t)));
+	assert(keylen(ptr) == keyLen);
+
+	memcpy(ptr + keypre(ptr) + keylen(ptr) - sizeof(uint64_t), fenceKey + keypre(fenceKey) + keyLen - sizeof(uint64_t), sizeof(uint64_t));
 
 	// release write lock
 
