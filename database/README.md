@@ -38,7 +38,7 @@ Sample output from storing/indexing/persisting 10000000 pennysort records (1GB):
 
     -rw-r--r-- 1 root root    1048576 Sep 16 22:19 tstdb
     -rw-r--r-- 1 root root 2147483648 Sep 16 22:19 tstdb.documents
-    -rw-r--r-- 1 root root 1073741824 Sep 16 22:19 tstdb.documents.index0
+    -rw-r--r-- 1 root root  536870912 Sep 16 22:19 tstdb.documents.index0
 
 Sample output from indexing/persisting 10000000 complete pennysort records (cmd 'w') InMemory:
 
@@ -69,6 +69,6 @@ Sample output with four concurrent threads each storing 10000000 pennysort recor
  
     -rw-r--r-- 1 root root    1048576 Sep 16 22:15 tstdb
     -rw-r--r-- 1 root root 8589934592 Sep 16 22:16 tstdb.documents
-    -rw-r--r-- 1 root root 4294967296 Sep 16 22:16 tstdb.documents.index0
+    -rw-r--r-- 1 root root 2147483648 Sep 16 22:16 tstdb.documents.index0
 
 Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu
