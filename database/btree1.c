@@ -80,7 +80,8 @@ uint8_t *buff;
 	//  set up stopper key
 
 	buff = keyaddr(page, page->min);
-	buff[0] = store64(buff + 1, 0, btree->leaf.bits);
+	btreePutPageNo(buff + 1, 0, btree->leaf.bits);
+	buff[0] = sizeof(uint64_t);
 
 	//  set up slot
 
@@ -129,3 +130,21 @@ void btreeUnlockPage(BtreePage *page, BtreeLock mode)
 	}
 }
 
+void btreePutPageNo(uint8_t *key, uint32_t len, uint64_t bits) {
+int idx = sizeof(uint64_t);
+
+	while (idx--)
+		key[len + idx] = bits, bits >>= 8;
+}
+
+uint64_t btreeGetPageNo(uint8_t *key, uint32_t len) {
+uint64_t result = 0;
+int idx = 0;
+
+	len -= sizeof(uint64_t);
+
+	do result <<= 8, result |= key[len + idx];
+	while (++idx < sizeof(uint64_t));
+
+	return result;
+}

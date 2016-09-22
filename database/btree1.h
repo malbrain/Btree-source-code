@@ -137,3 +137,6 @@ Status btreeFixKey (Handle *hndl, uint8_t *fenceKey, uint8_t lvl, bool stopper);
 
 void btreeLockPage(BtreePage *page, BtreeLock mode);
 void btreeUnlockPage(BtreePage *page, BtreeLock mode);
+
+void btreePutPageNo(uint8_t *key, uint32_t len, uint64_t bits);
+uint64_t btreeGetPageNo(uint8_t *key, uint32_t len);

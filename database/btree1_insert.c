@@ -16,7 +16,7 @@ Status stat;
 		totKeyLen += 2;
 
 	while (true) {
-	  if ((stat = btreeLoadPage(hndl, set, key, keyLen, lvl, Btree_lockWrite, false)))
+	  if ((stat = btreeLoadPage(hndl, set, key, keyLen - (lvl ? sizeof(uint64_t) : 0), lvl, Btree_lockWrite, false)))
 		return stat;
 
 	  if ((stat = btreeCleanPage(hndl, set, totKeyLen))) {
@@ -59,7 +59,7 @@ Status stat;
 		ptr = keyptr(set->page, set->slotIdx);
 	}
 
-	// update child pointer value
+	// update child pageNo
 
 	memcpy(ptr + keypre(ptr) + keylen(ptr) - sizeof(uint64_t), fenceKey + keypre(fenceKey) + keylen(fenceKey) - sizeof(uint64_t), sizeof(uint64_t));
 

@@ -159,20 +159,25 @@ void releaseHandle(Handle *hndl) {
 //	peel off 64 bit suffix value from key
 //	return number of key bytes remaining
 
-uint32_t get64(uint8_t *key, uint32_t len, uint64_t *result) {
+uint32_t get64(uint8_t *key, uint32_t len, uint64_t *where) {
 uint32_t xtrabytes = key[len - 1] & 0x7;
+uint64_t result;
 int idx = 0;
 
 	len -= xtrabytes + 2;
-	*result = key[len] & 0x1f;
+	result = key[len] & 0x1f;
 
 	while (idx++ < xtrabytes) {
-	  *result <<= 8;
-	  *result |= key[len + idx];
+	  result <<= 8;
+	  result |= key[len + idx];
 	}
 
-	*result <<= 5;
-	*result |= key[len + idx] >> 3;
+	result <<= 5;
+	result |= key[len + idx] >> 3;
+
+	if (where)
+		*where = result;
+
 	return len;
 }
 

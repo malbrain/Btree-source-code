@@ -40,8 +40,8 @@ BtreeIndex *btree = btreeIndex(hndl->map);
 uint32_t keyLen, nxt = btree->pageSize;
 BtreePage *leftPage, *rightPage;
 BtreeSlot *slot;
-uint64_t result;
 uint8_t *ptr;
+uint32_t off;
 Status stat;
 DbAddr left;
 
@@ -75,14 +75,20 @@ DbAddr left;
 	slot->off = nxt;
 
 	ptr = keyaddr(root->page, nxt);
-	ptr[0] = store64(ptr + 1, 0, right.bits);
+	btreePutPageNo(ptr + 1, 0, right.bits);
+	ptr[0] = sizeof(uint64_t);
 
-	// insert lower keys (left) fence key on newroot page as first key
-	// reserve space for maximum sized key.
+	// next insert lower keys (left) fence key on newroot page as
+	// first key and reserve space for the key.
 
-	keyLen = get64(leftKey + keypre(leftKey), keylen(leftKey), &result);
-	nxt -= keyLen + sizeof(uint64_t) + 2;
+	keyLen = keylen(leftKey);
 
+	if (keyLen + sizeof(uint64_t) < 128)
+		off = 1;
+	else
+		off = 2;
+
+	nxt -= keyLen + sizeof(uint64_t) + off;
 	slot = slotptr(root->page, 1);
 	slot->type = Btree_indexed;
 	slot->off = nxt;
@@ -90,9 +96,14 @@ DbAddr left;
 	//	construct lower (left) page key
 
 	ptr = keyaddr(root->page, nxt);
-	memcpy (ptr + 2, leftKey + keypre(leftKey), keyLen);
-	keyLen = store64(ptr + 2, keyLen, left.bits);
-	ptr[0] = keyLen / 256 | 0x80, ptr[1] = keyLen;
+	memcpy (ptr + off, leftKey + keypre(leftKey), keyLen);
+	btreePutPageNo(ptr + off, keyLen, left.bits);
+	keyLen += sizeof(uint64_t);
+
+	if (off == 1)
+		ptr[0] = keyLen;
+	else
+		ptr[0] = keyLen / 256 | 0x80, ptr[1] = keyLen;
 	
 	root->page->right.bits = 0;
 	root->page->min = nxt;
@@ -183,11 +194,10 @@ Status stat;
 	//	the right page number on leaf page.
 
 	stopper = dest->type == Btree_stopper;
+	keyLen = keylen(key);
 
 	if( set->page->lvl)
-		keyLen = keylen(key) - 2 - (key[totLen - 1] & 0x7);	// strip off pageNo
-	else
-		keyLen = keylen(key);	// length w/o pageNo
+		keyLen -= sizeof(uint64_t);		// strip off pageNo
 
 	if( keyLen + sizeof(uint64_t) < 128 )
 		off = 1;
@@ -197,7 +207,8 @@ Status stat;
 	//	copy key and add pageNo
 
 	memcpy (rightKey + off, key + keypre(key), keyLen);
-	keyLen = store64(rightKey + off, keyLen, right.bits);
+	btreePutPageNo(rightKey + off, keyLen, right.bits);
+	keyLen += sizeof(uint64_t);
 
 	if (off == 1)
 		rightKey[0] = keyLen;
@@ -284,10 +295,10 @@ Status stat;
 	//	extend left leaf fence key with
 	//	the left page number.
 
+	keyLen = keylen(key);
+
 	if( set->page->lvl)
-		keyLen = keylen(key) - 2 - (key[totLen - 1] & 0x7);	// strip off pageNo
-	else
-		keyLen = keylen(key);	// length w/o pageNo
+		keyLen -= sizeof(uint64_t);		// strip off pageNo
 
 	if( keyLen + sizeof(uint64_t) < 128 )
 		off = 1;
@@ -297,7 +308,8 @@ Status stat;
 	//	copy key and add pageNo
 
 	memcpy (leftKey + off, key + keypre(key), keyLen);
-	keyLen = store64(leftKey + off, keyLen, set->pageNo.bits);
+	btreePutPageNo(leftKey + off, keyLen, set->pageNo.bits);
+	keyLen += sizeof(uint64_t);
 
 	if (off == 1)
 		leftKey[0] = keyLen;
@@ -575,10 +587,11 @@ DbAddr prevPageNo;
 
 	  // get next page down
 
+	  ptr = keyptr(set->page, set->slotIdx);
+	  set->pageNo.bits = btreeGetPageNo(ptr + keypre(ptr), keylen(ptr));
+
 	  assert(drill > 0);
 	  drill--;
-	  ptr = keyptr(set->page, set->slotIdx);
-	  get64(ptr + keypre(ptr), keylen(ptr), &set->pageNo.bits);
 	  continue;
 	 }
 
