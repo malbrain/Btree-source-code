@@ -126,19 +126,25 @@ unsigned __stdcall index_file (void *arg)
 {
 int line = 0, found = 0, cnt = 0, idx;
 int ch, len = 0, slot, type = 0;
+Params params[MaxParam];
 unsigned char key[4096];
 ThreadArg *args = arg;
 KeySpec keySpec[1];
 void *docStore[1];
+void *cursor[1];
 void *index[1];
-uint64_t objId;
+Document *doc;
+ObjId objId;
 ObjId txnId;
 int stat;
 FILE *in;
 
 	txnId.bits = 0;
+	params[OnDisk].boolVal = args->onDisk;
+	params[Btree1Bits].intVal = args->bits;
+	params[Btree1Xtra].intVal = args->xtra;
 
-	openDocStore(docStore, args->database, "documents", strlen("documents"), args->onDisk);
+	openDocStore(docStore, args->database, "documents", strlen("documents"), params);
 
 	if( args->idx < strlen (args->type) )
 		ch = args->type[args->idx];
@@ -161,7 +167,7 @@ FILE *in;
 
 		keySpec->type = pennySort;
 
-		createIndex(index, docStore, "index0", strlen("index0"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
+		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
 
 		if( in = fopen (args->infile, "rb") )
 		  while( ch = getc(in), ch != EOF )
@@ -190,7 +196,7 @@ FILE *in;
 
 		keySpec->type = wholeRec;
 
-		createIndex(index, docStore, "index1", strlen("index1"), keySpec, sizeof(keySpec), args->bits, args->xtra, args->onDisk);
+		createIndex(index, docStore, Btree1IndexType, "index1", strlen("index1"), keySpec, sizeof(keySpec), params);
 
 		if( in = fopen (args->infile, "r") )
 		  while( ch = getc(in), ch != EOF )
@@ -202,7 +208,6 @@ FILE *in;
 #endif
 			  line++;
 
-			  len = addObjId(key, len, line);
 			  if ((stat = insertKey(index, key, len)))
 				  fprintf(stderr, "Key Error %d Line: %d\n", stat, line), exit(0);
 			  len = 0;
@@ -230,63 +235,36 @@ FILE *in;
 				key[len++] = ch;
 		fprintf(stderr, "finished %s for %d keys, found %d: %d reads %d writes\n", args->infile, line, found, bt->reads, bt->writes);
 		break;
-
+*/
 	case 's':
 		fprintf(stderr, "started scanning\n");
-	  	do {
-			if( set->latch = bt_pinlatch (bt, page_no, 1) )
-				set->page = bt_mappage (bt, set->latch);
-			else
-				fprintf(stderr, "unable to obtain latch"), exit(1);
-			bt_lockpage (bt, BtLockRead, set->latch);
-			next = bt_getid (set->page->right);
 
-			for( slot = 0; slot++ < set->page->cnt; )
-			 if( next || slot < set->page->cnt )
-			  if( !slotptr(set->page, slot)->dead ) {
-				ptr = keyptr(set->page, slot);
-				len = ptr->len;
+		createIndex(index, docStore, Btree1IndexType, "index1", strlen("index1"), keySpec, sizeof(keySpec), params);
+		createCursor (cursor, index, txnId);
 
-			    if( slotptr(set->page, slot)->type == Duplicate )
-					len -= BtId;
+	  	while (nextDoc(cursor, &doc) == OK) {
+			fwrite (doc + 1, doc->size, 1, stdout);
+			fputc ('\n', stdout);
+			cnt++;
+		}
 
-				fwrite (ptr->key, len, 1, stdout);
-				val = valptr(set->page, slot);
-				fwrite (val->value, val->len, 1, stdout);
-				fputc ('\n', stdout);
-				cnt++;
-			   }
-
-			bt_unlockpage (bt, BtLockRead, set->latch);
-			bt_unpinlatch (set->latch);
-	  	} while( page_no = next );
-
-		fprintf(stderr, " Total keys read %d: %d reads, %d writes\n", cnt, bt->reads, bt->writes);
+		fprintf(stderr, " Total keys read %d\n", cnt);
 		break;
 
 	case 'r':
 		fprintf(stderr, "started reverse scan\n");
-		if( slot = bt_lastkey (bt) )
-	  	   while( slot = bt_prevkey (bt, slot) ) {
-			if( slotptr(bt->cursor, slot)->dead )
-			  continue;
+		createIndex(index, docStore, Btree1IndexType, "index1", strlen("index1"), keySpec, sizeof(keySpec), params);
+		createCursor (cursor, index, txnId);
 
-			ptr = keyptr(bt->cursor, slot);
-			len = ptr->len;
-
-			if( slotptr(bt->cursor, slot)->type == Duplicate )
-				len -= BtId;
-
-			fwrite (ptr->key, len, 1, stdout);
-			val = valptr(bt->cursor, slot);
-			fwrite (val->value, val->len, 1, stdout);
+	  	while (prevDoc(cursor, &doc) == OK) {
+			fwrite (doc + 1, doc->size, 1, stdout);
 			fputc ('\n', stdout);
 			cnt++;
-		  }
+		}
 
-		fprintf(stderr, " Total keys read %d: %d reads, %d writes\n", cnt, bt->reads, bt->writes);
+		fprintf(stderr, " Total keys read %d\n", cnt);
 		break;
-
+/*
 	case 'c':
 #ifdef unix
 		posix_fadvise( bt->mgr->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
@@ -335,6 +313,7 @@ ThreadArg *args;
 float elapsed;
 int num = 0;
 char key[1];
+Params params[MaxParam];
 bool onDisk = true;
 void *database[1];
 void *docStore[1];
@@ -376,7 +355,8 @@ void *index[1];
 #endif
 	args = malloc (cnt * sizeof(ThreadArg));
 
-	openDatabase(database, argv[1], strlen(argv[1]), onDisk);
+	params[OnDisk].boolVal = onDisk;
+	openDatabase(database, argv[1], strlen(argv[1]), params);
 
 	//	fire off threads
 

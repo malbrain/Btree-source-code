@@ -28,19 +28,6 @@ struct Handle_ {
 	FreeList list[MaxObjType];
 };
 
-typedef struct {
-	DbAddr prevDoc[1];	// previous version of doc
-	uint64_t version;	// version of the document
-	ObjId docId;		// ObjId of the document
-	ObjId txnId;		// insert/update txn ID
-	ObjId delId;		// delete txn ID
-	uint32_t size;		// object size
-} Document;
-
-typedef struct {
-	uint32_t size;
-} Object;
-
 /**
  * even =>  reader timestamp
  * odd  =>  writer timestamp

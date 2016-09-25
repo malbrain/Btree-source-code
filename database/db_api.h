@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <stdbool.h>
 
-#define MAX_key		4096	// maximum key size in bytes
+#include "db_error.h"
 
 typedef struct {
 	Handle *hndl;			// docStore handle
@@ -15,16 +15,18 @@ typedef struct {
 } DocHndl;
 
 void initialize();
-int openDatabase(void **hndl, char *name, uint32_t nameLen, bool onDisk);
-int openDocStore(void **hndl, void **database, char *name, uint32_t nameLen, bool onDisk);
-int createIndex(void **hndl, void **docHndl, char *idxName, uint32_t nameLen, void *keySpec, uint16_t specSize, int bits, int xtra, bool onDisk);
-int createCursor(void **hndl, void **index);
-int cloneHandle(void **hndl, void **fromhndl);
+
+Status openDatabase(void **hndl, char *name, uint32_t nameLen, Params *params);
+Status openDocStore(void **hndl, void **database, char *name, uint32_t nameLen, Params *params);
+Status createIndex(void **hndl, void **docHndl, ArenaType type, char *idxName, uint32_t nameLen, void *keySpec, uint16_t specSize, Params *params);
+Status createCursor(void **hndl, void **index, ObjId txnId);
+Status cloneHandle(void **hndl, void **fromhndl);
 
 uint64_t beginTxn(void **hndl);
-int rollbackTxn(void **database, uint64_t txnId);
-int commitTxn(void **database, uint64_t txnId);
+Status rollbackTxn(void **database, ObjId txnId);
+Status commitTxn(void **database, ObjId txnId);
 
-int addDocument(void **hndl, void *obj, uint32_t objSize, uint64_t *objId, ObjId txnId);
-int insertKey(void **index, uint8_t *key, uint32_t len);
-uint32_t addObjId(uint8_t *key, uint32_t len, uint64_t addr);
+Status addDocument(void **hndl, void *obj, uint32_t objSize, ObjId *objId, ObjId txnId);
+Status insertKey(void **index, uint8_t *key, uint32_t len);
+Status nextDoc(void **hndl, Document **doc);
+Status prevDoc(void **hndl, Document **doc);

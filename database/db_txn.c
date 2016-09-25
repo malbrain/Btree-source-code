@@ -22,11 +22,11 @@ Txn *txn;
 
 //  find appropriate document version per txn beginning timestamp
 
-uint64_t findDocVer(DbMap *docStore, ObjId docId, Txn *txn) {
+Document *findDocVer(DbMap *docStore, ObjId docId, Txn *txn) {
 DbAddr *addr = fetchIdSlot(docStore, docId);
 DbMap *db = docStore->db;
+Document *doc = NULL;
 uint64_t txnTs;
-Document *doc;
 Txn *docTxn;
 
   //	examine prior versions
@@ -38,12 +38,12 @@ Txn *docTxn;
 	// is version in same txn?
 
 	if (!txn || doc->txnId.bits == txn->txnId.bits)
-		return addr->bits;
+		return doc;
 
 	// is the version permanent?
 
 	if (!doc->txnId.bits)
-		return addr->bits;
+		return doc;
 
 	// is version committed before our txn began?
 
@@ -52,7 +52,7 @@ Txn *docTxn;
 
 		if (isCommitted(docTxn->timestamp))
 		  if (docTxn->timestamp < txn->timestamp)
-			return addr->bits;
+			return doc;
 	}
 
 	//	advance txn ts past doc version ts
@@ -64,6 +64,6 @@ Txn *docTxn;
 	addr = doc->prevDoc;
   }
 
-  return 0;
+  return NULL;
 }
 

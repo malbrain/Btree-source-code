@@ -1,13 +1,14 @@
 #include "../db.h"
 #include "../db_object.h"
+#include "../db_index.h"
 #include "../db_map.h"
 #include "btree1.h"
 
-Status btreeInsertSlot (Handle *hndl, BtreeSet *set, uint8_t *key, uint32_t keyLen, BtreeSlotType type);
+Status btree1InsertSlot (Handle *hndl,Btree1Set *set, uint8_t *key, uint32_t keyLen, Btree1SlotType type);
 
-Status btreeInsertKey(Handle *hndl, uint8_t *key, uint32_t keyLen, uint8_t lvl, BtreeSlotType type) {
+Status btree1InsertKey(Handle *hndl, uint8_t *key, uint32_t keyLen, uint8_t lvl, Btree1SlotType type) {
 uint32_t totKeyLen = keyLen;
-BtreeSet set[1];
+Btree1Set set[1];
 Status stat;
 
 	if (keyLen < 128)
@@ -16,12 +17,12 @@ Status stat;
 		totKeyLen += 2;
 
 	while (true) {
-	  if ((stat = btreeLoadPage(hndl, set, key, keyLen - (lvl ? sizeof(uint64_t) : 0), lvl, Btree_lockWrite, false)))
+	  if ((stat = btree1LoadPage(hndl, set, key, keyLen - (lvl ? sizeof(uint64_t) : 0), lvl, Btree1_lockWrite, false)))
 		return stat;
 
-	  if ((stat = btreeCleanPage(hndl, set, totKeyLen))) {
+	  if ((stat = btree1CleanPage(hndl, set, totKeyLen))) {
 		if (stat == BTREE_needssplit) {
-		  if ((stat = btreeSplitPage(hndl, set)))
+		  if ((stat = btree1SplitPage(hndl, set)))
 			return stat;
 		  else
 			continue;
@@ -31,7 +32,7 @@ Status stat;
 
 	  // add the key to the page
 
-	  return btreeInsertSlot (hndl, set, key, keyLen, type);
+	  return btree1InsertSlot (hndl, set, key, keyLen, type);
 	}
 
 	return OK;
@@ -39,14 +40,14 @@ Status stat;
 
 //	update page's fence key in its parent
 
-Status btreeFixKey (Handle *hndl, uint8_t *fenceKey, uint8_t lvl, bool stopper) {
+Status btree1FixKey (Handle *hndl, uint8_t *fenceKey, uint8_t lvl, bool stopper) {
 uint32_t keyLen = keylen(fenceKey);
-BtreeSet set[1];
-BtreeSlot *slot;
+Btree1Set set[1];
+Btree1Slot *slot;
 uint8_t *ptr;
 Status stat;
 
-	if ((stat = btreeLoadPage(hndl, set, fenceKey + keypre(fenceKey), keyLen - sizeof(uint64_t), lvl, Btree_lockWrite, stopper)))
+	if ((stat = btree1LoadPage(hndl, set, fenceKey + keypre(fenceKey), keyLen - sizeof(uint64_t), lvl, Btree1_lockWrite, stopper)))
 		return stat;
 
 	slot = slotptr(set->page, set->slotIdx);
@@ -54,7 +55,7 @@ Status stat;
 
 	// if librarian slot
 
-	if (slot->type == Btree_librarian) {
+	if (slot->type == Btree1_librarian) {
 		slot = slotptr(set->page, ++set->slotIdx);
 		ptr = keyptr(set->page, set->slotIdx);
 	}
@@ -68,7 +69,7 @@ Status stat;
 
 	// release write lock
 
-	btreeUnlockPage (set->page, Btree_lockWrite);
+	btree1UnlockPage (set->page, Btree1_lockWrite);
 	return OK;
 }
 
@@ -76,16 +77,16 @@ Status stat;
 //	page must already be checked for
 //	adequate space
 
-Status btreeInsertSlot (Handle *hndl, BtreeSet *set, uint8_t *key, uint32_t keyLen, BtreeSlotType type) {
+Status btree1InsertSlot (Handle *hndl, Btree1Set *set, uint8_t *key, uint32_t keyLen, Btree1SlotType type) {
 uint32_t idx, prefixLen;
-BtreeSlot *slot;
+Btree1Slot *slot;
 uint8_t *ptr;
 
 	//	if found slot > desired slot and previous slot
 	//	is a librarian slot, use it
 
 	if( set->slotIdx > 1 )
-	  if( slotptr(set->page, set->slotIdx-1)->type == Btree_librarian )
+	  if( slotptr(set->page, set->slotIdx-1)->type == Btree1_librarian )
 		set->slotIdx--;
 
 	//	calculate key length
@@ -124,7 +125,7 @@ uint8_t *ptr;
 	slot->bits = set->page->min;
 	slot->type = type;
 
-	btreeUnlockPage (set->page, Btree_lockWrite);
+	btree1UnlockPage (set->page, Btree1_lockWrite);
 	return OK;
 }
 

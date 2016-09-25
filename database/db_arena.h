@@ -13,15 +13,6 @@
 #define MAX_path  4096
 #define MAX_blk		24	// max arena blk size in bits
 
-//	types of arenas
-
-enum MapType {
-	NotSetYet = 0,
-	DatabaseType,
-	DocStoreType,
-	BtreeIndexType
-};
-
 //  on disk arena segment
 
 typedef struct {

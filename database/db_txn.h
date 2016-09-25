@@ -16,6 +16,5 @@ typedef enum {
 	updDoc
 } TxnCmd;
 	
-
 void addIdToTxn(DbMap *database, Txn *txn, ObjId docId, TxnCmd cmd);
-
+Document *findDocVer(DbMap *docStore, ObjId docId, Txn *txn);
