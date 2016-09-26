@@ -57,11 +57,12 @@ typedef struct DbMap_ DbMap;
 
 typedef enum {
 	OnDisk = 0,			// base set
+	InitSize,
 
-	Btree1Bits = 1,		// Btree1 set
+	Btree1Bits = 2,		// Btree1 set
 	Btree1Xtra,
 
-	MaxParam = 3		// param array size
+	MaxParam = 4		// param array size
 } ParamSlot;
 
 typedef union {

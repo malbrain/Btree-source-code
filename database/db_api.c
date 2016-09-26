@@ -31,6 +31,7 @@ DbMap *map;
 }
 
 Status openDocStore(void **hndl, void **dbhndl, char *path, uint32_t pathLen, Params *params) {
+DbMap *map, *parent = NULL;
 DocStore *docStore;
 DocHndl *docHndl;
 uint64_t *inUse;
@@ -38,37 +39,45 @@ Handle *dbHndl;
 DataBase *db;
 DbAddr *addr;
 int idx, jdx;
-DbMap *map;
 
 	*hndl = NULL;
 
 	docHndl = db_malloc(sizeof(DocHndl), true);
 
-	if ((dbHndl = bindHandle(dbhndl)))
-		db = database(dbHndl->map);
-	else
+	if (dbhndl)
+	  if ((dbHndl = bindHandle(dbhndl)))
+		parent = dbHndl->map, db = database(parent);
+	  else
 		return ERROR_arenadropped;
 
 	//  create the docStore and assign database txn idx
 
-	lockLatch(dbHndl->map->arenaDef->nameTree->latch);
+	if (parent)
+		lockLatch(parent->arenaDef->nameTree->latch);
 
-	if ((map = createMap(dbHndl->map, path, pathLen, 0, sizeof(DocStore), sizeof(ObjId), 0, params[OnDisk].boolVal)))
+	if ((map = createMap(parent, path, pathLen, 0, sizeof(DocStore), sizeof(ObjId), params)))
 		docStore = docstore(map);
 	else
 		return ERROR_arenadropped;
 
+	//	allocate a map index for use in TXN document steps
+
 	if (!docStore->init) {
-		docStore->docIdx = arrayAlloc(dbHndl->map, db->txnIdx, sizeof(uint64_t));
-		docStore->init = 1;
+	  if (parent)
+		docStore->docIdx = arrayAlloc(parent, db->txnIdx, sizeof(uint64_t));
+
+	  docStore->init = 1;
 	}
 
-	releaseHandle(dbHndl);
+	if (dbhndl)
+		releaseHandle(dbHndl);
 
 	map->arena->type[0] = DocStoreType;
 	docHndl->hndl = makeHandle(map);
 
-	unlockLatch(dbHndl->map->arenaDef->nameTree->latch);
+	if (parent)
+		unlockLatch(parent->arenaDef->nameTree->latch);
+
 	*hndl = docHndl;
 	return OK;
 }
@@ -109,7 +118,7 @@ int idx;
 	//	transfer Id slots from arena childId list to our handle list
 
 	while (next->addr) {
-		skipList = getObj(docHndl->hndl->map, *next);
+		skipList = getObj(docHndl->hndl->map->db, *next);
 		idx = next->nslot;
 
 		if (!maxId)
@@ -130,19 +139,25 @@ int idx;
 }
 
 Status createIndex(void **hndl, void **dochndl, ArenaType type, char *name, uint32_t nameLen, void *keySpec, uint16_t specSize, Params *params) {
+DocHndl *docHndl = NULL;
 uint32_t baseSize = 0;
-DocHndl *docHndl;
+DbMap *map, *parent;
 Handle *idxhndl;
 DbIndex *index;
 Object *obj;
-DbMap *map;
 
 	*hndl = NULL;
 
-	if (!(docHndl = *dochndl))
+	if (dochndl)
+	  if (!(docHndl = *dochndl))
 		return ERROR_arenadropped;
+	  else
+		parent = docHndl->hndl->map;
+	else
+		parent = NULL;
 
-	lockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
+	if (parent)
+		lockLatch(parent->arenaDef->nameTree->latch);
 
 	switch (type) {
 	case Btree1IndexType:
@@ -150,11 +165,13 @@ DbMap *map;
 		break;
 	}
 
-	map = createMap(docHndl->hndl->map, name, nameLen, 0, baseSize, sizeof(ObjId), 0, params[OnDisk].boolVal);
+	map = createMap(parent, name, nameLen, 0, baseSize, sizeof(ObjId), params);
 
 	if (!map) {
-		unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
-		return ERROR_createindex;
+	  if (parent)
+		unlockLatch(parent->arenaDef->nameTree->latch);
+
+	  return ERROR_createindex;
 	}
 
 	idxhndl = makeHandle(map);
@@ -162,7 +179,9 @@ DbMap *map;
 	if (bindHandle((void **)&idxhndl))
 		index = dbIndex(map);
 	else {
-		unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
+		if (parent)
+		  unlockLatch(parent->arenaDef->nameTree->latch);
+
 		return ERROR_arenadropped;
 	}
 
@@ -180,10 +199,15 @@ DbMap *map;
 		}
 	}
 
-	unlockLatch(docHndl->hndl->map->arenaDef->nameTree->latch);
+	if (parent)
+		unlockLatch(parent->arenaDef->nameTree->latch);
 
-	releaseHandle(idxhndl);
-	releaseHandle(docHndl->hndl);
+	if (idxhndl)
+		releaseHandle(idxhndl);
+
+	if (docHndl)
+		releaseHandle(docHndl->hndl);
+
 	*hndl = idxhndl;
 	return OK;
 }

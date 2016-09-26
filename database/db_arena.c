@@ -30,80 +30,74 @@ ArenaDef *arenaDef;
 	arenaDef = rbPayload(entry);
 
 	writeLock2(parent->childMaps->lock);
-	catalog = skipAdd(parent, parent->childMaps->head, arenaDef->id);
+	catalog = skipAdd(parent->db, parent->childMaps->head, arenaDef->id);
 
 	//  open it
 
 	if (!*catalog)
-		*catalog = openMap(parent, entry->key, entry->keyLen, arenaDef);
+		*catalog = openMap(parent, (char *)(entry + 1), entry->keyLen, arenaDef);
 
 	map = *catalog;
 	writeUnlock2(parent->childMaps->lock);
 	return map;
 }
 
-// return existing arena from parent's child list or NULL
-//	call with parent nameTree r/b tree locked
-
-DbMap *arenaMap(DbMap *parent, char *name, uint32_t nameLen, PathStk *path) {
-DbMap *db = parent->db;
-RedBlack *entry;
-
-	//	see if this arena map has already been opened in our process
-
-	if ((entry = rbFind(db, parent->arenaDef->nameTree, name, nameLen, path)))
-	  return arenaRbMap(parent, entry);
-
-	return NULL;
-}
-
 //  open/create arena
 //	call with parent's nameTree r/b tree locked
 
-DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, uint64_t initSize, bool onDisk) {
-DbMap *map, *db = parent->db;
-ArenaDef *arenaDef;
+DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, Params *params) {
+ArenaDef *arenaDef, defs[1];
+PathStk pathStk[1];
 DbMap **catalog;
-PathStk path[1];
 RedBlack *entry;
 DbAddr *rbAddr;
+DbMap *map;
 
 	//	see if this arena ArenaDef already exists
 
-	if ((entry = rbFind(db, parent->arenaDef->nameTree, name, nameLen, path)))
+	if (parent) {
+	  if ((entry = rbFind(parent->db, parent->arenaDef->nameTree, name, nameLen, pathStk)))
 		return arenaRbMap(parent, entry);
 
-	// otherwise, create new database ArenaDef entry
+	  // otherwise, create new database ArenaDef entry
 
-	if ((entry = rbNew(db, name, nameLen, sizeof(ArenaDef))))
+	  if ((entry = rbNew(parent->db, name, nameLen, sizeof(ArenaDef))))
 		arenaDef = rbPayload(entry);
-	else
+	  else
 		return NULL;
 
-	arenaDef->id = atomicAdd64(&parent->arenaDef->childId, CHILDID_INCR);
-	arenaDef->node.bits = entry->addr.bits;
+	  arenaDef->id = atomicAdd64(&arenaDef->childId, CHILDID_INCR);
+	  arenaDef->node.bits = entry->addr.bits;
+	} else {
+	  memset (defs, 0, sizeof(ArenaDef));
+	  arenaDef = defs;
+	}
+
+	arenaDef->initSize = params[InitSize].int64Val;
+	arenaDef->onDisk = params[OnDisk].boolVal;
 	arenaDef->localSize = localSize;
-	arenaDef->initSize = initSize;
 	arenaDef->baseSize = baseSize;
 	arenaDef->objSize = objSize;
-	arenaDef->onDisk = onDisk;
 
 	map = openMap(parent, name, nameLen, arenaDef);
 
+	if (!parent)
+		return map;
+
 	writeLock2(parent->childMaps->lock);
-	catalog = skipPush(parent, parent->childMaps->head, arenaDef->id);
+	catalog = skipPush(parent->db, parent->childMaps->head, arenaDef->id);
 	*catalog = map;
 
 	writeUnlock2(parent->childMaps->lock);
 
 	//	add arena to parent child arenas
 
-	rbAdd(parent, parent->arenaDef->nameTree, entry, path);
+	rbAdd(parent->db, parent->arenaDef->nameTree, entry, pathStk);
 
 	//	add arenaId to child idList
 
 	writeLock2(parent->arenaDef->idList->lock);
-	rbAddr = skipAdd (parent, parent->arenaDef->idList->head, arenaDef->id);
+	rbAddr = skipAdd (parent->db, parent->arenaDef->idList->head, arenaDef->id);
 	rbAddr->bits = entry->addr.bits;
 	writeUnlock2(parent->arenaDef->idList->lock);
 	return map;
@@ -201,7 +195,7 @@ int32_t amt = 0;
 	free(segZero);
 #endif
 
-	map->arenaDef = arenaDef;
+	map->arenaDef = getObj(map, *map->arena->arenaDef);
 	unlockArena(map);
 
 	// wait for initialization to finish
@@ -217,7 +211,6 @@ DbMap *initMap (DbMap *map, ArenaDef *arenaDef) {
 uint64_t initSize = arenaDef->initSize;
 uint32_t segOffset;
 uint32_t bits;
-DataBase *db;
 
 	segOffset = sizeof(DbArena) + arenaDef->baseSize;
 	segOffset += 7;
@@ -260,16 +253,16 @@ DataBase *db;
 	map->arena->segBits = bits;
 	map->arena->delTs = 1;
 
-	//	are we a database?
+	//	do we have a parent?
 
 	if (map->parent) {
 		map->arenaDef = arenaDef;
 		return map;
 	}
 
-	db = database(map);
-	map->arenaDef = db->arenaDef;
-	memcpy(db->arenaDef, arenaDef, sizeof(ArenaDef));
+	map->arena->arenaDef->bits = allocBlk(map, sizeof(ArenaDef), false);
+	map->arenaDef = getObj(map, *map->arena->arenaDef);
+	memcpy(map->arenaDef, arenaDef, sizeof(ArenaDef));
 	return map;
 }
 
@@ -349,7 +342,7 @@ uint64_t nextSize;
 //  return 0 if out of memory.
 
 uint64_t allocObj(DbMap* map, DbAddr *free, int type, uint32_t size, bool zeroit ) {
-uint32_t bits;
+uint32_t bits, amt;
 DbAddr slot;
 
 	size += 7;
@@ -361,9 +354,12 @@ DbAddr slot;
 	bits = 32 - (__builtin_clz (size - 1));
 #endif
 	if (type < 0) {
+		amt = size;
 		type = bits;
 		free += type;
-	}
+		size = 1 << bits;
+	} else
+		amt = size;
 
 	lockLatch(free->latch);
 
@@ -378,7 +374,7 @@ DbAddr slot;
 	unlockLatch(free->latch);
 
 	if (zeroit)
-		memset (getObj(map, slot), 0, size);
+		memset (getObj(map, slot), 0, amt);
 
 	{
 		uint64_t max = map->arena->segs[slot.segment].size

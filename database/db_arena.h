@@ -45,6 +45,7 @@ struct DbArena_ {
 	DbAddr freeBlk[MAX_blk];	// free blocks in frames
 	DbAddr handleArray[1];		// handle array for our arena
 	DbAddr freeFrame[1];		// free frames in frames
+	DbAddr arenaDef[1];			// address of arenaDef for map
 	uint64_t objCount;			// overall number of objects
 	uint64_t objSpace;			// overall size of objects
 	uint32_t objSize;			// size of object array element
@@ -89,7 +90,7 @@ typedef struct {
 //	docstore variables
 
 typedef struct {
-	uint16_t docIdx;		// our txn index
+	uint16_t docIdx;		// our map index for txn
 	uint8_t init;			// set on init
 } DocStore;
 

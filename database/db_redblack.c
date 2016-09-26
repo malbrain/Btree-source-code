@@ -19,7 +19,7 @@ int rbKeyCmp (RedBlack *node, uint8_t *key2, uint32_t len2) {
 uint32_t len1 = node->keyLen;
 int ans;
 
-	if ((ans = memcmp (node->key, key2, len1 > len2 ? len2 : len1)))
+	if ((ans = memcmp (node + 1, key2, len1 > len2 ? len2 : len1)))
 		return ans > 0 ? 1 : -1;
 
 	if( len1 > len2 )
@@ -323,7 +323,7 @@ DbAddr child;
 	entry->keyLen = keyLen;
 	entry->payload = payload;
 	entry->addr.bits = child.bits;
-	memcpy (entry->key, key, keyLen);
+	memcpy (entry + 1, key, keyLen);
   }
 #ifdef DEBUG
 	else

@@ -90,6 +90,7 @@ SkipEntry *entry;
 }
 
 //	Push new maximal key onto head of skip list
+//	return the value slot address
 
 void *skipPush(DbMap *map, DbAddr *skip, uint64_t key) {
 SkipList *skipList;
@@ -105,7 +106,7 @@ uint64_t next;
 
 	entry = skipList->array + skip->nslot++;
 	*entry->key = key;
-	return entry;
+	return entry->val;
 }
 
 //	Add new key to skip list

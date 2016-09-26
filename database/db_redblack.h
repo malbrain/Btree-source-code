@@ -16,10 +16,9 @@ typedef struct RedBlack_ {
 	DbAddr addr;			// this entry addr in map
 	char latch[1];			// this entry latch
 	char red;				// is tree node red?
-	char key[0];			// entry key
 } RedBlack;
 
-#define rbPayload(entry) ((void *)(entry->key + entry->keyLen))
+#define rbPayload(entry) ((void *)((char *)(entry + 1) + entry->keyLen))
 
 typedef Status (*RbFcnPtr)(DbMap *map, RedBlack *entry, void *params);
 
