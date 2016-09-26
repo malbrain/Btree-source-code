@@ -144,8 +144,6 @@ FILE *in;
 	params[Btree1Bits].intVal = args->bits;
 	params[Btree1Xtra].intVal = args->xtra;
 
-	openDocStore(docStore, args->database, "documents", strlen("documents"), params);
-
 	if( args->idx < strlen (args->type) )
 		ch = args->type[args->idx];
 	else
@@ -166,6 +164,8 @@ FILE *in;
 		  fprintf(stderr, "started pennysort insert for %s\n", args->infile);
 
 		keySpec->type = pennySort;
+
+		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
 
 		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
 
@@ -196,7 +196,7 @@ FILE *in;
 
 		keySpec->type = wholeRec;
 
-		createIndex(index, docStore, Btree1IndexType, "index1", strlen("index1"), keySpec, sizeof(keySpec), params);
+		createIndex(index, NULL, Btree1IndexType, "index1", strlen("index1"), keySpec, sizeof(keySpec), params);
 
 		if( in = fopen (args->infile, "r") )
 		  while( ch = getc(in), ch != EOF )
@@ -239,7 +239,9 @@ FILE *in;
 	case 's':
 		fprintf(stderr, "started scanning\n");
 
-		createIndex(index, docStore, Btree1IndexType, "index1", strlen("index1"), keySpec, sizeof(keySpec), params);
+		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
+
+		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
 		createCursor (cursor, index, txnId);
 
 	  	while (nextDoc(cursor, &doc) == OK) {
@@ -253,7 +255,10 @@ FILE *in;
 
 	case 'r':
 		fprintf(stderr, "started reverse scan\n");
-		createIndex(index, docStore, Btree1IndexType, "index1", strlen("index1"), keySpec, sizeof(keySpec), params);
+
+		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
+
+		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
 		createCursor (cursor, index, txnId);
 
 	  	while (prevDoc(cursor, &doc) == OK) {
@@ -264,29 +269,19 @@ FILE *in;
 
 		fprintf(stderr, " Total keys read %d\n", cnt);
 		break;
-/*
+
 	case 'c':
-#ifdef unix
-		posix_fadvise( bt->mgr->idx, 0, 0, POSIX_FADV_SEQUENTIAL);
-#endif
 		fprintf(stderr, "started counting\n");
-		page_no = LEAF_page;
 
-		while( page_no < bt_getid(bt->mgr->pagezero->alloc->right) ) {
-			if( bt_readpage (bt->mgr, bt->frame, page_no) )
-				break;
+		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
+		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
+		createCursor (cursor, index, txnId);
 
-			if( !bt->frame->free && !bt->frame->lvl )
-				cnt += bt->frame->act;
+	  	while (nextDoc(cursor, &doc) == OK)
+			cnt++;
 
-			bt->reads++;
-			page_no++;
-		}
-		
-	  	cnt--;	// remove stopper key
-		fprintf(stderr, " Total keys counted %d: %d reads, %d writes\n", cnt, bt->reads, bt->writes);
+		fprintf(stderr, " Total keys counted %d\n", cnt);
 		break;
-*/
 	}
 
 #ifdef unix

@@ -37,7 +37,7 @@ uint32_t Splits;
 // call with key for smaller half and right page addr.
 
 Status btree1SplitRoot(Handle *hndl, Btree1Set *root, DbAddr right, uint8_t *leftKey) {
-Btree1Index *btree1 = btree1Index(hndl->map);
+Btree1Index *btree1 = btree1index(hndl->map);
 uint32_t keyLen, nxt = btree1->pageSize;
 Btree1Page *leftPage, *rightPage;
 Btree1Slot *slot;
@@ -122,7 +122,7 @@ DbAddr left;
 
 Status btree1SplitPage (Handle *hndl, Btree1Set *set) {
 uint8_t leftKey[Btree1_maxkey], rightKey[Btree1_maxkey];
-Btree1Index *btree1 = btree1Index(hndl->map);
+Btree1Index *btree1 = btree1index(hndl->map);
 uint32_t cnt = 0, idx = 0, max, nxt, off;
 Btree1Slot librarian, *source, *dest;
 Btree1PageType type = Btree1_leafPage;
@@ -258,6 +258,10 @@ Status stat;
 	source = slotptr(frame, 0);
 	dest = slotptr(set->page, 0);
 
+#ifdef DEBUG
+	key = keyaddr(frame, source[2].off);
+	assert(keylen(key) > 0);
+#endif
 	//  assemble page of smaller keys from temporary frame copy
 
 	while( source++, cnt++ < max ) {
@@ -352,7 +356,7 @@ Status stat;
 //	true  - ok to insert
 
 Status btree1CleanPage(Handle *hndl, Btree1Set *set, uint32_t totKeyLen) {
-Btree1Index *btree1 = btree1Index(hndl->map);
+Btree1Index *btree1 = btree1index(hndl->map);
 Btree1Slot librarian, *source, *dest;
 uint32_t size = btree1->pageSize;
 Btree1Page *page = set->page;
@@ -520,7 +524,7 @@ uint32_t good = 0;
 //	leave page rd or wr locked as requested
 
 Status btree1LoadPage(Handle *hndl, Btree1Set *set, uint8_t *key, uint32_t keyLen, uint8_t lvl, Btree1Lock lock, bool stopper) {
-Btree1Index *btree1 = btree1Index(hndl->map);
+Btree1Index *btree1 = btree1index(hndl->map);
 uint8_t drill = 0xff, *ptr;
 Btree1Page *prevPage = NULL;
 Btree1Lock mode, prevMode;

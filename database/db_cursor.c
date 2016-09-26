@@ -6,7 +6,7 @@
 #include "db_txn.h"
 
 Status dbNextKey(DbCursor *cursor) {
-SkipEntry *entry;
+uint64_t *ver;
 Handle *index;
 Status stat;
 Txn *txn;
@@ -31,11 +31,11 @@ Txn *txn;
 	  cursor->keyLen = get64(cursor->key, cursor->keyLen, &cursor->ver);
 	  cursor->keyLen = get64(cursor->key, cursor->keyLen, &cursor->docId.bits);
 
-	  if (!(cursor->doc = findDocVer(index->map->parent, cursor->docId, txn)));
+	  if (!(cursor->doc = findDocVer(index->map->parent, cursor->docId, txn)))
 		continue;
 
-	  if ((entry = skipFind(index->map->parent, cursor->doc->verKeys, index->map->arenaDef->id)))
-		if (*entry->val == cursor->ver)
+	  if ((ver = listFind(index->map->parent, cursor->doc->verKeys, index->map->arenaDef->id)))
+		if (*ver == cursor->ver)
 		  return OK;
 	}
 
@@ -44,7 +44,7 @@ Txn *txn;
 }
 
 Status dbPrevKey(DbCursor *cursor) {
-SkipEntry *entry;
+uint64_t *ver;
 Handle *index;
 Status stat;
 Txn *txn;
@@ -72,8 +72,8 @@ Txn *txn;
 	  if (!(cursor->doc = findDocVer(index->map->parent, cursor->docId, txn)));
 		continue;
 
-	  if ((entry = skipFind(index->map->parent, cursor->doc->verKeys, index->map->arenaDef->id)))
-		if (*entry->val == cursor->ver)
+	  if ((ver = skipFind(index->map->parent, cursor->doc->verKeys, index->map->arenaDef->id)))
+		if (*ver == cursor->doc->version)
 		  return OK;
 	}
 

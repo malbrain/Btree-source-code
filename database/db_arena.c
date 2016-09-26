@@ -195,7 +195,13 @@ int32_t amt = 0;
 	free(segZero);
 #endif
 
-	map->arenaDef = getObj(map, *map->arena->arenaDef);
+	//	do we have a parent?
+
+	if (parent)
+		map->arenaDef = arenaDef;
+	else
+		map->arenaDef = getObj(map, *map->arena->arenaDef);
+
 	unlockArena(map);
 
 	// wait for initialization to finish

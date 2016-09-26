@@ -7,13 +7,6 @@
 
 #include "db_error.h"
 
-typedef struct {
-	Handle *hndl;			// docStore handle
-	RWLock2 lock[1];		// index list r/w lock
-	uint64_t childId;		// last child installed
-	SkipHead indexes[1];	// index handles by Id
-} DocHndl;
-
 void initialize();
 
 Status openDatabase(void **hndl, char *name, uint32_t nameLen, Params *params);

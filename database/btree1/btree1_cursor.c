@@ -18,7 +18,7 @@ Btree1Cursor *cursor;
 Btree1Index *btree1;
 Btree1Page *first;
 
-    btree1 = btree1Index(index->map);
+    btree1 = btree1index(index->map);
 
 	cursor = db_malloc(sizeof(Btree1Cursor), true);
 	cursor->pageAddr.bits = btree1NewPage(index, 0);
@@ -67,6 +67,7 @@ Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
 
 int btree1NextKey (DbCursor *dbCursor, Handle *index) {
 Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
+uint8_t *key;
 
 	while (true) {
 	  uint32_t max = cursor->page->cnt;
@@ -80,8 +81,9 @@ Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
 		if (slot->dead)
 		  continue;
 
-		cursor->base->key = keyptr(cursor->page, slot->off);
-		cursor->base->keyLen = keylen(cursor->base->key);
+		key = keyaddr(cursor->page, slot->off);
+		cursor->base->key = key + keypre(key);
+		cursor->base->keyLen = keylen(key);
 		return OK;
 	  }
 
@@ -96,6 +98,7 @@ Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
 
 int btree1PrevKey (DbCursor *dbCursor, Handle *index) {
 Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
+uint8_t *key;
 
 	while (true) {
 	  if (cursor->slotIdx) {
@@ -104,8 +107,9 @@ Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
 		if (slot->dead)
 		  continue;
 
-		cursor->base->key = keyptr(cursor->page, slot->off);
-		cursor->base->keyLen = keylen(cursor->base->key);
+		key = keyaddr(cursor->page, slot->off);
+		cursor->base->key = key + keypre(key);
+		cursor->base->keyLen = keylen(key);
 		return OK;
 	  }
 

@@ -23,7 +23,7 @@ int low = 0, diff;
 
 //	find key value in skiplist, return entry address
 
-SkipEntry *skipFind(DbMap *map, DbAddr *skip, uint64_t key) {
+void *skipFind(DbMap *map, DbAddr *skip, uint64_t key) {
 DbAddr *next = skip;
 SkipList *skipList;
 SkipEntry *entry;
@@ -35,7 +35,7 @@ SkipEntry *entry;
 	  entry = skipSearch(skipList, next->nslot, key);
 
 	  if (*entry->key == key)
-		return entry;
+		return entry->val;
 
 	  return NULL;
 	}
@@ -175,4 +175,48 @@ int min, max;
   skip->nslot = 1;
 
   return skipList->array->val;
+}
+
+// regular list entry
+
+void *listAdd(DbMap *map, DbAddr *list, uint64_t key) {
+DbAddr *next = list, addr;
+DbList *entry;
+
+  while (next->addr) {
+	entry = getObj(map, *next);
+
+	if (*entry->node->key == key)
+		return entry->node->val;
+
+	next = entry->next;
+  }
+
+  // insert new node onto beginning of list
+
+  addr.bits = allocBlk(map, sizeof(DbList), true) | list->bits & ADDR_MUTEX_SET;
+
+  entry = getObj(map, addr);
+  entry->next->bits = list->bits;
+  *entry->node->key = key;
+  list->bits = addr.bits;
+  return entry->node->val;
+}
+
+// search list for entry
+
+void *listFind(DbMap *map, DbAddr *list, uint64_t key) {
+DbAddr *next = list;
+DbList *entry;
+
+  while (next->addr) {
+	entry = getObj(map, *next);
+
+	if (*entry->node->key == key)
+		return entry->node->val;
+
+	next = entry->next;
+  }
+
+  return NULL;
 }

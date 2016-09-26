@@ -22,6 +22,14 @@ typedef struct {
 	uint8_t *key;
 } DbCursor;
 
-#define dbIndex(map) ((DbIndex *)(map->arena + 1))
-#define dbCursor(map) ((DbCursor *)(map->arena + 1))
+typedef struct {
+	Handle *hndl;			// docStore handle
+	RWLock2 lock[1];		// index list r/w lock
+	uint64_t childId;		// last child installed
+	SkipHead indexes[1];	// index handles by Id
+} DocHndl;
 
+#define dbindex(map) ((DbIndex *)(map->arena + 1))
+#define dbcursor(map) ((DbCursor *)(map->arena + 1))
+
+Status storeDoc(DocHndl *docHndl, Handle *hndl, void *obj, uint32_t objSize, ObjId *result, ObjId txnId);

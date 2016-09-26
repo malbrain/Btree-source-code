@@ -8,7 +8,7 @@
 //	create an empty page
 
 uint64_t btree1NewPage (Handle *hndl, uint8_t lvl) {
-Btree1Index *btree1 = btree1Index(hndl->map);
+Btree1Index *btree1 = btree1index(hndl->map);
 Btree1PageType type;
 Btree1Page *page;
 uint32_t size;
@@ -36,7 +36,7 @@ DbAddr addr;
 //	initialize btree1 root page
 
 Status btree1Init(Handle *hndl, Params *params) {
-Btree1Index *btree1 = btree1Index(hndl->map);
+Btree1Index *btree1 = btree1index(hndl->map);
 Btree1Page *page;
 Btree1Slot *slot;
 uint8_t *buff;

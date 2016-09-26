@@ -105,8 +105,8 @@ typedef struct {
 	uint32_t slotIdx;	// cursor position index
 } Btree1Cursor;
 
-#define btree1Index(map) ((Btree1Index *)(map->arena + 1))
-#define btree1Cursor(map) ((Btree1Cursor *)(map->arena + 1))
+#define btree1index(map) ((Btree1Index *)(map->arena + 1))
+#define btree1cursor(map) ((Btree1Cursor *)(map->arena + 1))
 
 DbCursor *btree1NewCursor(Handle *idx, uint64_t timestamp, ObjId txnId);
 uint8_t *btree1CursorKey(DbCursor *dbCursor, uint32_t *len);

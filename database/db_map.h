@@ -38,9 +38,6 @@ void *fetchIdSlot (DbMap *map, ObjId objId);
 uint64_t getFreeFrame(DbMap *map);
 uint64_t allocFrame(DbMap *map);
 
-// void *cursorNext(DbCursor *cursor, DbMap *index);
-// void *cursorPrev(DbCursor *cursor, DbMap *index);
-
 /**
  * spin latches
  */

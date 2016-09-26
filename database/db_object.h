@@ -55,12 +55,19 @@ typedef struct {
 
 //	skip list entry array
 
-#define SKIP_node 31
+#define SKIP_node 15
 
 typedef struct {
-	SkipEntry array[SKIP_node];	// array of key/value pairs
 	DbAddr next[1];				// next block of keys
+	SkipEntry array[SKIP_node];	// array of key/value pairs
 } SkipList;
+
+//	regular list
+
+typedef struct {
+	DbAddr next[1];		// next in list
+	SkipEntry node[1];	// this element
+} DbList;
 
 //	Identifier bits
 
@@ -84,7 +91,10 @@ void *arrayAssign(DbMap *map, DbAddr *array, uint16_t idx, size_t size);
 void arrayExpand(DbMap *map, DbAddr *array, size_t size, uint16_t idx);
 uint16_t arrayAlloc(DbMap *map, DbAddr *array, size_t size);
 
-SkipEntry *skipFind(DbMap *map, DbAddr *skip, uint64_t key);
+void *skipFind(DbMap *map, DbAddr *skip, uint64_t key);
 void *skipPush(DbMap *map, DbAddr *skip, uint64_t key);
 void *skipAdd(DbMap *map, DbAddr *skip, uint64_t key);
 void skipDel(DbMap *map, DbAddr *skip, uint64_t key);
+
+void *listAdd(DbMap *map, DbAddr *list, uint64_t key);
+void *listFind(DbMap *map, DbAddr *list, uint64_t key);
