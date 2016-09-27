@@ -389,7 +389,7 @@ DbAddr addr;
 	if( page->garbage < size / 5 )
 		return BTREE_needssplit;
 
-	if( (addr.bits = allocNode(hndl->map, hndl->list, type, size, false)) )
+	if( (addr.bits = allocObj(hndl->map, hndl->list[type].free, hndl->list[type].tail, type, size, false)) )
 		frame = getObj(hndl->map, addr);
 	else
 		return ERROR_outofmemory;

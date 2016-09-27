@@ -23,7 +23,7 @@ DbAddr addr;
 		size <<= btree1->leafXtra;
 	}
 
-	if ((addr.bits = allocNode(hndl->map, hndl->list, type, size, true)))
+	if ((addr.bits = allocObj(hndl->map, hndl->list[type].free, hndl->list[type].tail, type, size, true)))
 		page = getObj(hndl->map, addr);
 	else
 		return 0;

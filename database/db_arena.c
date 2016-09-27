@@ -344,10 +344,10 @@ uint64_t nextSize;
 	return true;
 }
 
-//  allocate an object from non-wait frame list
+//  allocate an object from frame list
 //  return 0 if out of memory.
 
-uint64_t allocObj(DbMap* map, DbAddr *free, int type, uint32_t size, bool zeroit ) {
+uint64_t allocObj(DbMap* map, DbAddr *free, DbAddr *tail, int type, uint32_t size, bool zeroit ) {
 uint32_t bits, amt;
 DbAddr slot;
 
@@ -361,16 +361,27 @@ DbAddr slot;
 #endif
 	if (type < 0) {
 		amt = size;
-		type = bits;
-		free += type;
+		type = bits * 2;
 		size = 1 << bits;
+
+		// implement half-bit sizing
+
+		if (~amt & (1 << (bits - 2)))
+			size -= 1 << (bits - 2);
+		else
+			type++;
+
+		free += type;
+
+		if (tail)
+			tail += type;
 	} else
 		amt = size;
 
 	lockLatch(free->latch);
 
 	while (!(slot.bits = getNodeFromFrame(map, free))) {
-	  if (!getNodeWait(map, free, NULL))
+	  if (!getNodeWait(map, free, tail))
 		if (!initObjFrame(map, free, type, size)) {
 			unlockLatch(free->latch);
 			return 0;
@@ -399,7 +410,7 @@ void freeBlk(DbMap *map, DbAddr *addr) {
 }
 
 uint64_t allocBlk(DbMap *map, uint32_t size, bool zeroit) {
-	return allocObj(map, map->arena->freeBlk, -1, size, zeroit);
+	return allocObj(map, map->arena->freeBlk, NULL, -1, size, zeroit);
 }
 
 void mapAll (DbMap *map) {
@@ -488,54 +499,8 @@ void *fetchIdSlot (DbMap *map, ObjId objId) {
 	return map->base[objId.seg] + map->arena->segs[objId.seg].size - objId.index * map->arena->objSize;
 }
 
-uint32_t Used, Alloc;
-
-uint64_t allocNode(DbMap *map, FreeList *list, int type, uint32_t size, bool zeroit) {
-unsigned long bits = 3;
-uint32_t dup;
-DbAddr slot;
-
-	size += 7;
-	size &= -8;
-
-#ifdef _WIN32
-	_BitScanReverse(&bits, size - 1);
-	bits++;
-#else
-	bits = 32 - (__builtin_clz (size - 1));
-#endif
-
-	if (type < 0)
-		type = bits;
-
-	lockLatch(list[type].free->latch);
-
-	while (!(slot.bits = getNodeFromFrame(map, list[type].free)))
-	  if (!getNodeWait(map, list[type].free, list[type].tail))
-		if (!(dup = initObjFrame(map, list[type].free, type, size)))
-		  return unlockLatch(list[type].free->latch), 0;
-#ifdef DEBUG
-		else
-		  atomicAdd32(&Alloc, dup);
-#endif
-
-	unlockLatch(list[type].free->latch);
-
-	if (zeroit)
-		memset (getObj(map, slot), 0, size);
-
-#ifdef DEBUG
-	atomicAdd32(&Used, 1);
-#endif
-	slot.type = type;
-	return slot.bits;
-}
-
 void freeNode(DbMap *map, FreeList *list, DbAddr slot) {
 	addSlotToFrame(map, list[slot.type].free, slot.bits);
-#ifdef DEBUG
-	atomicAdd32(&Used, -1);
-#endif
 }
 
 //

@@ -25,13 +25,12 @@ void closeMap(DbMap *map);
 
 uint64_t allocMap(DbMap *map, uint32_t size);
 uint64_t allocBlk(DbMap *map, uint32_t size, bool zeroit);
-uint64_t allocObj(DbMap *map, DbAddr *free, int type, uint32_t size, bool zeroit);
+uint64_t allocObj(DbMap *map, DbAddr *free, DbAddr *tail, int type, uint32_t size, bool zeroit);
 uint64_t allocObjId(DbMap *map, FreeList *list, uint16_t idx);
 void *fetchObjSlot (DbMap *map, ObjId objId);
 void *getObj(DbMap *map, DbAddr addr); 
 void freeBlk(DbMap *map, DbAddr *addr);
 
-uint64_t allocNode(DbMap *map, FreeList *list, int type, uint32_t size, bool zeroit);
 void freeNode(DbMap *map, FreeList *list, DbAddr slot);
 
 void *fetchIdSlot (DbMap *map, ObjId objId);

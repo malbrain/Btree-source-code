@@ -9,8 +9,6 @@
 #include "db_arena.h"
 #include "db_malloc.h"
 
-#define MAX_blk 24
-
 //
 // Raw object wrapper
 //

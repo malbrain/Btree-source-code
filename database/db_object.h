@@ -6,7 +6,7 @@ enum ObjType {
 	FrameType,
 	ObjIdType,			// ObjId value
 	MinObjType = 3,		// minimum object size in bits
-	MaxObjType = 24		// each power of two, 3 - 24
+	MaxObjType = 49		// each half power of two, 3 - 24
 };
 
 typedef struct {

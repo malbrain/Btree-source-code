@@ -11,7 +11,7 @@
 #define MAX_segbits  (32 + 3)  // 32 bit offset and 3 bits multiplier
 
 #define MAX_path  4096
-#define MAX_blk		24	// max arena blk size in bits
+#define MAX_blk		49	// max arena blk size in half bits
 
 //  on disk arena segment
 

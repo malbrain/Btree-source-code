@@ -151,7 +151,7 @@ int idx;
 	if (txnId.bits)
 		txn = fetchIdSlot(hndl->map->db, txnId);
 
-	if ((addr.bits = allocNode(hndl->map, hndl->list, -1, objSize + sizeof(Document), false)))
+	if ((addr.bits = allocObj(hndl->map, hndl->list->free, hndl->list->tail, -1, objSize + sizeof(Document), false)))
 		doc = getObj(hndl->map, addr);
 	else
 		return ERROR_outofmemory;
