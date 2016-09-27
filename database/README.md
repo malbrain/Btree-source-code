@@ -81,4 +81,13 @@ Sample cursor scan output and sort check of 40M pennysort records:
      user 0m22.578s
      sys  0m4.005s
 
+Sample cursor scan count of 40M pennysort records:
+
+    [root@test7x64 xlink]# ./dbtest tstdb c
+    started counting
+     Total keys counted 40000000
+     real 0m20.568s
+     user 0m18.457s
+     sys  0m2.123s
+
 Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu
