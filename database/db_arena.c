@@ -366,7 +366,7 @@ DbAddr slot;
 
 		// implement half-bit sizing
 
-		if (~amt & (1 << (bits - 2)))
+		if (bits > 4 && (~amt & (1 << (bits - 2))))
 			size -= 1 << (bits - 2);
 		else
 			type++;
