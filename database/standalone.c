@@ -342,28 +342,36 @@ void *index[1];
 	if( argc > 5 )
 		onDisk = atoi(argv[5]);
 
-	cnt = argc - 6;
+	if (argc > 6)
+		cnt = argc - 6;
+	else
+		cnt = 0;
+
 #ifdef unix
 	threads = malloc (cnt * sizeof(pthread_t));
 #else
 	threads = GlobalAlloc (GMEM_FIXED|GMEM_ZEROINIT, cnt * sizeof(HANDLE));
 #endif
-	args = malloc (cnt * sizeof(ThreadArg));
+	args = malloc ((cnt ? cnt : 1) * sizeof(ThreadArg));
 
 	params[OnDisk].boolVal = onDisk;
 	openDatabase(database, argv[1], strlen(argv[1]), params);
 
 	//	fire off threads
 
-	for( idx = 0; idx < cnt; idx++ ) {
-		args[idx].infile = argv[idx + 6];
-		args[idx].database = database;
-		args[idx].onDisk = onDisk;
-		args[idx].type = argv[2];
-		args[idx].bits = bits;
-		args[idx].xtra = xtra;
-		args[idx].num = num;
-		args[idx].idx = idx;
+	idx = 0;
+
+	do {
+	  args[idx].infile = argv[idx + 6];
+	  args[idx].database = database;
+	  args[idx].onDisk = onDisk;
+	  args[idx].type = argv[2];
+	  args[idx].bits = bits;
+	  args[idx].xtra = xtra;
+	  args[idx].num = num;
+	  args[idx].idx = idx;
+
+	  if (cnt) {
 #ifdef unix
 		if( err = pthread_create (threads + idx, NULL, index_file, args + idx) )
 		  fprintf(stderr, "Error creating thread %d\n", err);
@@ -372,7 +380,15 @@ void *index[1];
 		  fprintf(stderr, "Error creating thread errno = %d\n", errno);
 
 #endif
-	}
+		continue;
+	  }
+
+	  //  if not files specified,
+	  //  run index_file once
+
+	  index_file (args);
+
+	} while (++idx < cnt);
 
 	// 	wait for termination
 
