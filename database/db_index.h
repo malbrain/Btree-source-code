@@ -25,8 +25,9 @@ typedef struct {
 typedef struct {
 	Handle *hndl;			// docStore handle
 	RWLock2 lock[1];		// index list r/w lock
-	uint64_t childId;		// last child installed
 	SkipHead indexes[1];	// index handles by Id
+	uint64_t childId;		// last child installed
+	uint32_t idxCnt;		// number of indexes
 } DocHndl;
 
 #define dbindex(map) ((DbIndex *)(map->arena + 1))

@@ -9,17 +9,24 @@
 
 //  open and install index map in docHndl cache
 
-void installIdx(DocHndl *docHndl, SkipEntry *skipEntry) {
+void installIdx(DocHndl *docHndl, ArrayEntry *entry) {
 RedBlack *rbEntry;
 Handle *idxhndl;
 Handle **hndl;
 DbAddr rbAddr;
 
-	rbAddr.bits = *skipEntry->val;
+	//  no more than 255 indexes
+
+	if (docHndl->idxCnt < 255)
+		docHndl->idxCnt++;
+	else
+		return;
+
+	rbAddr.bits = *entry->val;
 	rbEntry = getObj(docHndl->hndl->map->parent, rbAddr);
 
 	idxhndl = makeHandle(arenaRbMap(docHndl->hndl->map, rbEntry));
-	hndl = skipAdd(docHndl->hndl->map, docHndl->indexes->head, *skipEntry->key);
+	hndl = skipAdd(docHndl->hndl->map, docHndl->indexes->head, *entry->key);
 	*hndl = idxhndl;
 }
 
@@ -30,7 +37,7 @@ ArenaDef *arenaDef = docHndl->hndl->map->arenaDef;
 DbAddr *next = arenaDef->idList->head;
 uint64_t maxId = 0;
 SkipList *skipList;
-SkipEntry *entry;
+ArrayEntry *entry;
 int idx;
 
 	if (docHndl->childId < arenaDef->childId)
@@ -63,7 +70,8 @@ int idx;
 	readUnlock2 (arenaDef->idList->lock);
 }
 
-Status installIndexKey(DocHndl *docHndl, SkipEntry *entry, Document *doc) {
+Status installIndexKey(DocHndl *docHndl, ArrayEntry *entry, Document *doc) {
+ArrayEntry *array = getObj(docHndl->hndl->map, *doc->verKeys);
 uint8_t key[MAX_key];
 uint64_t *verPtr;
 Handle *idxhndl;
@@ -86,7 +94,7 @@ int keyLen;
 	keyLen = store64(key, keyLen, doc->docId.bits);
 	keyLen = store64(key, keyLen, doc->version);
 
-	verPtr = listAdd(docHndl->hndl->map, doc->verKeys, *entry->key);
+	verPtr = arrayAdd(array, doc->verKeys->nslot++, *entry->key);
 	*verPtr = doc->version;
 
 	switch (*idxhndl->map->arena->type) {
@@ -101,12 +109,15 @@ int keyLen;
 Status installIndexKeys(DocHndl *docHndl, Document *doc) {
 DbAddr *next = docHndl->indexes->head;
 SkipList *skipList;
+ArrayEntry *array;
 Status stat;
 int idx;
 
 	readLock2 (docHndl->indexes->lock);
 
 	//	install keys for document
+
+	doc->verKeys->bits = allocBlk (docHndl->hndl->map, docHndl->idxCnt * sizeof(ArrayEntry), true);
 
 	while (next->addr) {
 	  skipList = getObj(docHndl->hndl->map, *next);

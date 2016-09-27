@@ -6,6 +6,7 @@
 #include "db_txn.h"
 
 Status dbNextKey(DbCursor *cursor) {
+ArrayEntry *array;
 uint64_t *ver;
 Handle *index;
 Status stat;
@@ -34,7 +35,9 @@ Txn *txn;
 	  if (!(cursor->doc = findDocVer(index->map->parent, cursor->docId, txn)))
 		continue;
 
-	  if ((ver = listFind(index->map->parent, cursor->doc->verKeys, index->map->arenaDef->id)))
+	  array = getObj(index->map->parent, *cursor->doc->verKeys);
+
+	  if ((ver = arrayFind(array, cursor->doc->verKeys->nslot, index->map->arenaDef->id)))
 		if (*ver == cursor->ver)
 		  return OK;
 	}
@@ -44,6 +47,7 @@ Txn *txn;
 }
 
 Status dbPrevKey(DbCursor *cursor) {
+ArrayEntry *array;
 uint64_t *ver;
 Handle *index;
 Status stat;
@@ -72,7 +76,9 @@ Txn *txn;
 	  if (!(cursor->doc = findDocVer(index->map->parent, cursor->docId, txn)));
 		continue;
 
-	  if ((ver = skipFind(index->map->parent, cursor->doc->verKeys, index->map->arenaDef->id)))
+	  array = getObj(index->map->parent, *cursor->doc->verKeys);
+
+	  if ((ver = arrayFind(array, cursor->doc->verKeys->nslot, index->map->arenaDef->id)))
 		if (*ver == cursor->doc->version)
 		  return OK;
 	}

@@ -3,36 +3,18 @@
 #include "db.h"
 #include "db_map.h"
 
-//	search SkipList node for key value
-//	return highest entry <= key
-
-SkipEntry *skipSearch(SkipList *skipList, int high, uint64_t key) {
-int low = 0, diff;
-
-	//	key < high
-	//	key >= low
-
-	while ((diff = (high - low) / 2))
-		if (key < *skipList->array[low + diff].key)
-			high = low + diff;
-		else
-			low += diff;
-
-	return skipList->array + low;
-}
-
 //	find key value in skiplist, return entry address
 
 void *skipFind(DbMap *map, DbAddr *skip, uint64_t key) {
 DbAddr *next = skip;
 SkipList *skipList;
-SkipEntry *entry;
+ArrayEntry *entry;
 
   while (next->addr) {
 	skipList = getObj(map, *next);
 
 	if (*skipList->array->key <= key) {
-	  entry = skipSearch(skipList, next->nslot, key);
+	  entry = arraySearch(skipList->array, next->nslot, key);
 
 	  if (*entry->key == key)
 		return entry->val;
@@ -51,14 +33,14 @@ SkipEntry *entry;
 void skipDel(DbMap *map, DbAddr *skip, uint64_t key) {
 SkipList *skipList = NULL, *prevList;
 DbAddr *next = skip;
-SkipEntry *entry;
+ArrayEntry *entry;
 
   while (next->addr) {
 	prevList = skipList;
 	skipList = getObj(map, *next);
 
 	if (*skipList->array->key <= key) {
-	  entry = skipSearch(skipList, next->nslot, key);
+	  entry = arraySearch(skipList->array, next->nslot, key);
 
 	  if (*entry->key != key)
 		return;
@@ -94,7 +76,7 @@ SkipEntry *entry;
 
 void *skipPush(DbMap *map, DbAddr *skip, uint64_t key) {
 SkipList *skipList;
-SkipEntry *entry;
+ArrayEntry *entry;
 uint64_t next;
 
 	if (!skip->addr || skip->nslot == SKIP_node) {
@@ -116,7 +98,7 @@ void *skipAdd(DbMap *map, DbAddr *skip, uint64_t key) {
 SkipList *skipList = NULL, *nextList;
 DbAddr *next = skip;
 uint64_t prevBits;
-SkipEntry *entry;
+ArrayEntry *entry;
 int min, max;
 
   while (next->addr) {
@@ -130,7 +112,7 @@ int min, max;
 	}
 
 	if (*skipList->array->key <= key) {
-	  entry = skipSearch(skipList, next->nslot, key);
+	  entry = arraySearch(skipList->array, next->nslot, key);
 	
 	  //  does key already exist?
 
@@ -177,46 +159,46 @@ int min, max;
   return skipList->array->val;
 }
 
-// regular list entry
+// add array entry
 
-void *listAdd(DbMap *map, DbAddr *list, uint64_t key) {
-DbAddr *next = list, addr;
-DbList *entry;
+void *arrayAdd(ArrayEntry *array, uint32_t max, uint64_t key) {
 
-  while (next->addr) {
-	entry = getObj(map, *next);
+  while (max)
+	if (*array[max - 1].key < key)
+	  break;
+	else
+	  array[max] = array[max - 1];
 
-	if (*entry->node->key == key)
-		return entry->node->val;
-
-	next = entry->next;
-  }
-
-  // insert new node onto beginning of list
-
-  addr.bits = allocBlk(map, sizeof(DbList), true) | list->bits & ADDR_MUTEX_SET;
-
-  entry = getObj(map, addr);
-  entry->next->bits = list->bits;
-  *entry->node->key = key;
-  list->bits = addr.bits;
-  return entry->node->val;
+  *array[max].key = key;
+  return array[max].val;
 }
 
-// search list for entry
+// find array entry, or return NULL
 
-void *listFind(DbMap *map, DbAddr *list, uint64_t key) {
-DbAddr *next = list;
-DbList *entry;
+void *arrayFind(ArrayEntry *array, int high, uint64_t key) {
+ArrayEntry *entry = arraySearch(array, high, key);
 
-  while (next->addr) {
-	entry = getObj(map, *next);
+	if(*entry->key == key)
+		return entry->val;
 
-	if (*entry->node->key == key)
-		return entry->node->val;
-
-	next = entry->next;
-  }
-
-  return NULL;
+	return NULL;
 }
+
+//	search Array node for key value
+//	return highest entry <= key
+
+ArrayEntry *arraySearch(ArrayEntry *array, int high, uint64_t key) {
+int low = 0, diff;
+
+	//	key < high
+	//	key >= low
+
+	while ((diff = (high - low) / 2))
+		if (key < *array[low + diff].key)
+			high = low + diff;
+		else
+			low += diff;
+
+	return array + low;
+}
+

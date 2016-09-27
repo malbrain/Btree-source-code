@@ -46,28 +46,21 @@ typedef struct {
 	RWLock2 lock[1];	// reader/writer lock
 } SkipHead;
 
-//	skip list entry
+//	Array entry
 
 typedef struct {
 	uint64_t key[1];	// entry key
 	uint64_t val[1];	// entry value
-} SkipEntry;
+} ArrayEntry;
 
 //	skip list entry array
 
 #define SKIP_node 15
 
 typedef struct {
-	DbAddr next[1];				// next block of keys
-	SkipEntry array[SKIP_node];	// array of key/value pairs
+	DbAddr next[1];					// next block of keys
+	ArrayEntry array[SKIP_node];	// array of key/value pairs
 } SkipList;
-
-//	regular list
-
-typedef struct {
-	DbAddr next[1];		// next in list
-	SkipEntry node[1];	// this element
-} DbList;
 
 //	Identifier bits
 
@@ -96,5 +89,6 @@ void *skipPush(DbMap *map, DbAddr *skip, uint64_t key);
 void *skipAdd(DbMap *map, DbAddr *skip, uint64_t key);
 void skipDel(DbMap *map, DbAddr *skip, uint64_t key);
 
-void *listAdd(DbMap *map, DbAddr *list, uint64_t key);
-void *listFind(DbMap *map, DbAddr *list, uint64_t key);
+void *arrayFind(ArrayEntry *array, int high, uint64_t key);
+void *arrayAdd(ArrayEntry *array, uint32_t max, uint64_t key);
+ArrayEntry *arraySearch(ArrayEntry *array, int high, uint64_t key);

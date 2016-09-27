@@ -84,7 +84,7 @@ typedef enum {
 } ArenaType;
 
 typedef struct {
-	DbAddr verKeys[1];	// skiplist of versions by index key
+	DbAddr verKeys[1];	// array of versions by index key
 	DbAddr prevDoc[1];	// previous version of doc
 	uint64_t version;	// version of the document
 	ObjId docId;		// ObjId of the document
