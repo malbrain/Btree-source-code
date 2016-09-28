@@ -36,14 +36,14 @@ Btree1Page *first;
 	return cursor->base;
 }
 
-int btree1ReturnCursor(DbCursor *dbCursor) {
+Status btree1ReturnCursor(DbCursor *dbCursor) {
 Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
 Handle *index;
 
 	// return cursor page buffer
 
 	if ((index = bindHandle(cursor->base->idx)))
-		freeNode(index->map, index->list, cursor->pageAddr);
+		addSlotToFrame(index->map, &index->list[cursor->pageAddr.type], cursor->pageAddr);
 	else
 		return ERROR_arenadropped;
 
@@ -65,7 +65,7 @@ Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
 	return true;
 }
 
-int btree1NextKey (DbCursor *dbCursor, Handle *index) {
+Status btree1NextKey (DbCursor *dbCursor, DbMap *index) {
 Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
 uint8_t *key;
 
@@ -88,7 +88,7 @@ uint8_t *key;
 	  }
 
 	  if (cursor->page->right.bits)
-		cursor->page = getObj(index->map, cursor->page->right);
+		cursor->page = getObj(index, cursor->page->right);
 	  else
 		return ERROR_endoffile;
 
@@ -96,7 +96,7 @@ uint8_t *key;
 	}
 }
 
-int btree1PrevKey (DbCursor *dbCursor, Handle *index) {
+Status btree1PrevKey (DbCursor *dbCursor, DbMap *index) {
 Btree1Cursor *cursor = (Btree1Cursor *)dbCursor;
 uint8_t *key;
 
@@ -114,7 +114,7 @@ uint8_t *key;
 	  }
 
 	  if (cursor->page->left.bits)
-		cursor->page = getObj(index->map, cursor->page->left);
+		cursor->page = getObj(index, cursor->page->left);
 	  else
 		return ERROR_endoffile;
 

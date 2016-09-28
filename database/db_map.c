@@ -20,6 +20,14 @@
 #include "db_arena.h"
 #include "db_map.h"
 
+void yield() {
+#ifndef _WIN32
+			pause();
+#else
+			Yield();
+#endif
+}
+
 //  assemble filename path
 
 int getPath(char *path, int max, char *name, int len, DbMap *parent) {

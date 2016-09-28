@@ -74,7 +74,7 @@ Sample output with four concurrent threads each storing 10M pennysort records:
 Sample cursor scan output and sort check of 40M pennysort records:
 
     [root@test7x64 xlink]# export LC_ALL=C
-    [root@test7x64 xlink]# ./dbtest tstdb s 14 0 1 x | sort -c
+    [root@test7x64 xlink]# ./dbtest tstdb s | sort -c
     started scanning
      Total keys read 40000000
      real 0m28.190s

@@ -6,6 +6,7 @@
 #include "db_map.h"
 #include "db_api.h"
 #include "btree1/btree1.h"
+#include "artree/artree.h"
 
 void initialize() {
 	memInit();
@@ -104,6 +105,9 @@ Object *obj;
 		lockLatch(parent->arenaDef->nameTree->latch);
 
 	switch (type) {
+	case ARTreeIndexType:
+		baseSize = sizeof(ArtIndex);
+		break;
 	case Btree1IndexType:
 		baseSize = sizeof(Btree1Index);
 		break;
@@ -137,6 +141,10 @@ Object *obj;
 		obj->size = specSize;
 
 		switch (type) {
+		case ARTreeIndexType:
+			artInit(idxhndl, params);
+			break;
+
 		case Btree1IndexType:
 			btree1Init(idxhndl, params);
 			break;
@@ -174,8 +182,13 @@ Txn *txn;
 		timestamp = allocateTimestamp(idxhndl->map->db, en_reader);
 
 	switch (*idxhndl->map->arena->type) {
+	case ARTreeIndexType:
+		cursor = artNewCursor(idxhndl, timestamp, txnId);
+		break;
+
 	case Btree1IndexType:
 		cursor = btree1NewCursor(idxhndl, timestamp, txnId);
+		break;
 	}
 
 	releaseHandle(idxhndl);
@@ -194,8 +207,13 @@ Handle *idxhndl;
 		return ERROR_arenadropped;
 
 	switch (*idxhndl->map->arena->type) {
+	case ARTreeIndexType:
+		artReturnCursor(cursor);
+		break;
+
 	case Btree1IndexType:
 		btree1ReturnCursor(cursor);
+		break;
 	}
 
 	*hndl = NULL;
@@ -275,8 +293,13 @@ Status stat;
 		return ERROR_arenadropped;
 
 	switch (*idxhndl->map->arena->type) {
+	case ARTreeIndexType:
+		stat = artInsertKey(idxhndl, key, len);
+		break;
+
 	case Btree1IndexType:
 		stat = btree1InsertKey(idxhndl, key, len, 0, Btree1_indexed);
+		break;
 	}
 
 	releaseHandle(idxhndl);

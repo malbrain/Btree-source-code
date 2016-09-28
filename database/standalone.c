@@ -167,7 +167,7 @@ FILE *in;
 
 		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
 
-		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
+		createIndex(index, docStore, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
 
 		if( in = fopen (args->infile, "rb") )
 		  while( ch = getc(in), ch != EOF )
@@ -196,7 +196,7 @@ FILE *in;
 
 		keySpec->type = wholeRec;
 
-		createIndex(index, NULL, Btree1IndexType, "index1", strlen("index1"), keySpec, sizeof(keySpec), params);
+		createIndex(index, NULL, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
 
 		if( in = fopen (args->infile, "r") )
 		  while( ch = getc(in), ch != EOF )
@@ -241,7 +241,7 @@ FILE *in;
 
 		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
 
-		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
+		createIndex(index, docStore, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
 		createCursor (cursor, index, txnId);
 
 	  	while (nextDoc(cursor, &doc) == OK) {
@@ -258,7 +258,7 @@ FILE *in;
 
 		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
 
-		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
+		createIndex(index, docStore, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
 		createCursor (cursor, index, txnId);
 
 	  	while (prevDoc(cursor, &doc) == OK) {
@@ -274,7 +274,7 @@ FILE *in;
 		fprintf(stderr, "started counting\n");
 
 		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
-		createIndex(index, docStore, Btree1IndexType, "index0", strlen("index0"), keySpec, sizeof(keySpec), params);
+		createIndex(index, docStore, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
 		createCursor (cursor, index, txnId);
 
 	  	while (nextDoc(cursor, &doc) == OK)

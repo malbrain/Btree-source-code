@@ -322,7 +322,7 @@ Status stat;
 
 	//  return temporary frame
 
-	freeNode(hndl->map, hndl->list, addr);
+	addSlotToFrame(hndl->map, hndl->list[addr.type].free, addr);
 
 	// if current page is the root page, split it
 
@@ -447,7 +447,7 @@ DbAddr addr;
 
 	//  return temporary frame
 
-	freeNode(hndl->map, hndl->list, addr);
+	addSlotToFrame(hndl->map, hndl->list[addr.type].free, addr);
 
 	//	see if page has enough space now, or does it still need splitting?
 

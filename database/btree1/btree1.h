@@ -114,8 +114,8 @@ uint8_t *btree1CursorKey(DbCursor *dbCursor, uint32_t *len);
 uint64_t btree1NewPage (Handle *hndl, uint8_t lvl);
 DbAddr *btree1FindKey(DbMap  *map, DbCursor *dbCursor, uint8_t *key, uint32_t keylen);
 bool btree1SeekKey (DbCursor *dbCursor, uint8_t *key, uint32_t keylen);
-int btree1NextKey (DbCursor *cursor, Handle *index);
-int btree1PrevKey (DbCursor *cursor, Handle *index);
+Status btree1NextKey (DbCursor *cursor, DbMap *index);
+Status btree1PrevKey (DbCursor *cursor, DbMap *index);
 
 #define slotptr(page, slot) (((Btree1Slot *)(page+1)) + (((int)slot)-1))
 

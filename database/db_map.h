@@ -31,8 +31,6 @@ void *fetchObjSlot (DbMap *map, ObjId objId);
 void *getObj(DbMap *map, DbAddr addr); 
 void freeBlk(DbMap *map, DbAddr *addr);
 
-void freeNode(DbMap *map, FreeList *list, DbAddr slot);
-
 void *fetchIdSlot (DbMap *map, ObjId objId);
 uint64_t getFreeFrame(DbMap *map);
 uint64_t allocFrame(DbMap *map);
@@ -64,3 +62,4 @@ uint64_t compareAndSwap(uint64_t* target, uint64_t compare_val, uint64_t swap_va
 void lockArena (DbMap *map);
 void unlockArena (DbMap *map);
 bool fileExists(char *path);
+void yield();

@@ -34,5 +34,6 @@ typedef enum {
 	ERROR_btreestruct,
 	ERROR_arenadropped,
 	BTREE_needssplit,
+	ARTREE_error,
 } Status;
 

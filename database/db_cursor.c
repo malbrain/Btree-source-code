@@ -4,6 +4,8 @@
 #include "db_index.h"
 #include "db_map.h"
 #include "db_txn.h"
+#include "btree1/btree1.h"
+#include "artree/artree.h"
 
 Status dbNextKey(DbCursor *cursor) {
 ArrayEntry *array;
@@ -22,8 +24,13 @@ Txn *txn;
 
 	while (true) {
 	  switch(*index->map->arena->type) {
+	  case ARTreeIndexType:
+		stat = artNextKey (cursor, index->map);
+		break;
+
 	  case Btree1IndexType:
-		stat = btree1NextKey (cursor, index);
+		stat = btree1NextKey (cursor, index->map);
+		break;
 	  }
 
 	  if (stat)
@@ -63,8 +70,12 @@ Txn *txn;
 
 	while (true) {
 	  switch(*index->map->arena->type) {
+		stat = artPrevKey (cursor, index->map);
+		break;
+
 	  case Btree1IndexType:
-		stat = btree1PrevKey (cursor, index);
+		stat = btree1PrevKey (cursor, index->map);
+		break;
 	  }
 
 	  if (stat)

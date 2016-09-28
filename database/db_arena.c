@@ -499,10 +499,6 @@ void *fetchIdSlot (DbMap *map, ObjId objId) {
 	return map->base[objId.seg] + map->arena->segs[objId.seg].size - objId.index * map->arena->objSize;
 }
 
-void freeNode(DbMap *map, FreeList *list, DbAddr slot) {
-	addSlotToFrame(map, list[slot.type].free, slot.bits);
-}
-
 //
 // allocate next available object id
 //

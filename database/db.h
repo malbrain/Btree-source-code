@@ -80,7 +80,7 @@ typedef enum {
 	DocStoreType,
 	Btree1IndexType,
 	Btree2IndexType,
-	ARTreeType
+	ARTreeIndexType
 } ArenaType;
 
 typedef struct {
