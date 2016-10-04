@@ -16,9 +16,9 @@ typedef union {
 		uint16_t segment;	// arena segment number
 		union {
 			struct {
-				uint8_t mutex:1;	// mutex bit;
-				uint8_t dead:1;		// entry dead
 				uint8_t type:6;		// object type
+				uint8_t alive:1;	// entry alive
+				uint8_t mutex:1;	// mutex bit
 			};
 			volatile char latch[1];
 		};
@@ -37,7 +37,10 @@ typedef union {
 	};
 } DbAddr;
 
-#define ADDR_MUTEX_SET 0x1000000000000ULL
+#define MUTEX_BIT  0x80
+#define ALIVE_BIT  0x40
+
+#define ADDR_MUTEX_SET 0x80000000000000ULL
 
 typedef union {
 	struct {

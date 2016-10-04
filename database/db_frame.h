@@ -1,6 +1,6 @@
 #pragma once
 
-#define FrameSlots 64
+#define FrameSlots 128
 
 typedef struct {
 	DbAddr next;			// next frame in queue

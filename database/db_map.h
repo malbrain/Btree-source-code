@@ -1,8 +1,5 @@
 #pragma once
 
-#define MUTEX_BIT  0x1
-#define DEAD_BIT   0x2
-
 typedef struct ArenaDef_ ArenaDef;
 typedef struct PathStk_ PathStk;
 
@@ -17,6 +14,7 @@ typedef struct PathStk_ PathStk;
 DbMap *createMap(DbMap *parent, char *name, uint32_t nameLen, uint32_t localSize, uint32_t baseSize, uint32_t objSize, Params *params);
 DbMap *openMap(DbMap *parent, char *name, uint32_t nameLen, ArenaDef *arena);
 DbMap *arenaRbMap(DbMap *parent, RedBlack *entry);
+DbMap *initMap(DbMap *map, ArenaDef *arenaDef);
 void closeMap(DbMap *map);
 
 /**

@@ -120,7 +120,7 @@ int slot64(int ch, uint64_t alloc, volatile uint8_t* keys) {
 
 Status artNextKey(DbCursor *dbCursor, DbMap *index) {
 ArtCursor *cursor = (ArtCursor *)dbCursor;
-int slot, prev, spanMax;
+int slot, prev, len;
 
   if (cursor->atRightEOF)
 	return ERROR_endoffile;
@@ -129,9 +129,22 @@ int slot, prev, spanMax;
 	CursorStack* stack = &cursor->stack[cursor->depth - 1];
 	cursor->base->keyLen = stack->off;
 
-	spanMax = SPANLEN(stack->slot->type);
-
 	switch (stack->slot->type < SpanNode ? stack->slot->type : SpanNode) {
+		case KeyPass: {
+			ARTSplice* splice = getObj(index, *stack->slot);
+
+			if (stack->ch < 0) {
+				cursor->stack[cursor->depth].slot->bits = splice->next->bits;
+				cursor->stack[cursor->depth].addr = splice->next;
+				cursor->stack[cursor->depth].ch = -1;
+				cursor->stack[cursor->depth++].off = cursor->base->keyLen;
+				stack->ch = 0;
+				return OK;
+			}
+
+			break;
+		}
+
 		case KeyEnd: {
 			if (stack->ch < 0) {
 				stack->ch = 0;
@@ -143,7 +156,7 @@ int slot, prev, spanMax;
 
 		case SpanNode: {
 			ARTSpan* spanNode = getObj(index, *stack->slot);
-			spanMax += stack->slot->nbyte + 1;
+			len = stack->slot->nbyte + 1;
 
 			if (spanNode->timestamp > cursor->base->ts)
 				break;
@@ -151,8 +164,8 @@ int slot, prev, spanMax;
 			//  continue into our next slot
 
 			if (stack->ch < 0) {
-				memcpy(cursor->key + cursor->base->keyLen, spanNode->bytes, spanMax);
-				cursor->base->keyLen += spanMax;
+				memcpy(cursor->key + cursor->base->keyLen, spanNode->bytes, len);
+				cursor->base->keyLen += len;
 				cursor->stack[cursor->depth].slot->bits = spanNode->next->bits;
 				cursor->stack[cursor->depth].addr = spanNode->next;
 				cursor->stack[cursor->depth].ch = -1;
@@ -229,7 +242,7 @@ int slot, prev, spanMax;
 
 			while (stack->ch < 256) {
 				uint32_t idx = ++stack->ch;
-				if (idx < 256 && radix256Node->alloc[idx / 64] & (1ULL << (idx % 64)))
+				if (idx < 256 && radix256Node->radix[idx].type)
 					break;
 			}
 
@@ -263,7 +276,7 @@ int slot, prev, spanMax;
 
 Status artPrevKey(DbCursor *dbCursor, DbMap *index) {
 ArtCursor *cursor = (ArtCursor *)dbCursor;
-int slot, spanMax;
+int slot, len;
 
 	if (cursor->atLeftEOF)
 		return ERROR_endoffile;
@@ -282,15 +295,29 @@ int slot, spanMax;
 		CursorStack* stack = &cursor->stack[cursor->depth - 1];
 		cursor->base->keyLen = stack->off;
 
-		spanMax = SPANLEN(stack->slot->type);
-
 		switch (stack->slot->type < SpanNode ? stack->slot->type : SpanNode) {
 			case UnusedSlot: {
 				break;
 			}
 
+			case KeyPass: {
+				ARTSplice* splice = getObj(index, *stack->slot);
+
+				if (stack->ch > 255) {
+					cursor->stack[cursor->depth].slot->bits = splice->next->bits;
+					cursor->stack[cursor->depth].addr = splice->next;
+					cursor->stack[cursor->depth].ch = 256;
+					cursor->stack[cursor->depth++].off = cursor->base->keyLen;
+					stack->ch = 0;
+					continue;
+				}
+
+				stack->ch = -1;
+				return OK;
+			}
+
 			case KeyEnd: {
-				if (stack->ch == 0) {
+				if (stack->ch == 256) {
 					stack->ch = -1;
 					return OK;
 				}
@@ -300,7 +327,7 @@ int slot, spanMax;
 
 			case SpanNode: {
 				ARTSpan* spanNode = getObj(index, *stack->slot);
-				spanMax += stack->slot->nbyte + 1;
+				len = stack->slot->nbyte + 1;
 
 				if (spanNode->timestamp > cursor->base->ts)
 					break;
@@ -308,8 +335,8 @@ int slot, spanMax;
 				// examine next node under slot
 
 				if (stack->ch > 255) {
-					memcpy(cursor->key + cursor->base->keyLen, spanNode->bytes, spanMax);
-					cursor->base->keyLen += spanMax;
+					memcpy(cursor->key + cursor->base->keyLen, spanNode->bytes, len);
+					cursor->base->keyLen += len;
 					cursor->stack[cursor->depth].slot->bits = spanNode->next->bits;
 					cursor->stack[cursor->depth].addr = spanNode->next;
 					cursor->stack[cursor->depth].ch = 256;
@@ -388,7 +415,7 @@ int slot, spanMax;
 
 				while (--stack->ch >= 0) {
 					uint32_t idx = stack->ch;
-					if (radix256Node->alloc[idx / 64] & (1ULL << (idx % 64)))
+					if (radix256Node->radix[idx].type)
 						break;
 				}
 

@@ -142,7 +142,7 @@ Handle *hndl;
 
 	//	is there a DROP request active?
 
-	if (hndl->map->arena->mutex[0] & DEAD_BIT) {
+	if (~hndl->map->arena->mutex[0] & ALIVE_BIT) {
 		atomicOr32(hndl->status, HANDLE_dead);
 		return releaseHandle(hndl), NULL;
 	}

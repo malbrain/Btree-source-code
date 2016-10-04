@@ -21,23 +21,30 @@ DbArena memArena[1];
 DbMap memMap[1];
 
 void memInit() {
+ArenaDef arenaDef[1];
+
 	memMap->arena = memArena;
+	memMap->db = memMap;
+
 #ifdef _WIN32
 	memMap->hndl = INVALID_HANDLE_VALUE;
 #else
 	memMap->hndl = -1;
 #endif
+
+	memset (arenaDef, 0, sizeof(arenaDef));
+	initMap(memMap, arenaDef);
 }
 
 void db_free (void *obj) {
 rawobj_t *raw = obj;
 
-	if (raw[-1].addr->dead) {
+	if (!raw[-1].addr->alive) {
 		fprintf(stderr, "Duplicate db_free\n");
 		exit (1);
 	}
 
-	raw[-1].addr->dead = 1;
+	raw[-1].addr->alive = 0;
 	freeBlk(memMap, raw[-1].addr);
 }
 
@@ -77,7 +84,7 @@ rawobj_t *raw = old, *mem;
 uint32_t oldSize, newSize;
 DbAddr addr[1];
 
-	if (raw[-1].addr->dead) {
+	if (!raw[-1].addr->alive) {
 		fprintf(stderr, "Duplicate db_realloc\n");
 		exit (1);
 	}

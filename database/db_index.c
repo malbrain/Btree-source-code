@@ -6,6 +6,7 @@
 #include "db_map.h"
 #include "db_api.h"
 #include "btree1/btree1.h"
+#include "artree/artree.h"
 
 //  open and install index map in docHndl cache
 
@@ -23,7 +24,7 @@ DbAddr rbAddr;
 		return;
 
 	rbAddr.bits = *entry->val;
-	rbEntry = getObj(docHndl->hndl->map->parent, rbAddr);
+	rbEntry = getObj(docHndl->hndl->map->parent->db, rbAddr);
 
 	idxhndl = makeHandle(arenaRbMap(docHndl->hndl->map, rbEntry));
 	hndl = skipAdd(docHndl->hndl->map, docHndl->indexes->head, *entry->key);
@@ -32,7 +33,7 @@ DbAddr rbAddr;
 
 //	install new indexes
 
-void installIndexes(DocHndl *docHndl) {
+Status installIndexes(DocHndl *docHndl) {
 ArenaDef *arenaDef = docHndl->hndl->map->arenaDef;
 DbAddr *next = arenaDef->idList->head;
 uint64_t maxId = 0;
@@ -43,7 +44,7 @@ int idx;
 	if (docHndl->childId < arenaDef->childId)
 		readLock2 (arenaDef->idList->lock);
 	else
-		return;
+		return OK;
 
 	writeLock2 (docHndl->indexes->lock);
 
@@ -68,6 +69,7 @@ int idx;
 	docHndl->childId = maxId;
 	writeUnlock2 (docHndl->indexes->lock);
 	readUnlock2 (arenaDef->idList->lock);
+	return OK;
 }
 
 Status installIndexKey(DocHndl *docHndl, ArrayEntry *entry, Document *doc) {
@@ -99,7 +101,7 @@ int keyLen;
 
 	switch (*idxhndl->map->arena->type) {
 	case ARTreeIndexType:
-		stat = artInsertKey(idxhndl, key, keyLen, 0, Btree1_indexed);
+		stat = artInsertKey(idxhndl, key, keyLen);
 		break;
 
 	case Btree1IndexType:
@@ -180,10 +182,6 @@ int idx;
 
 	slot = fetchIdSlot(hndl->map, docId);
 	slot->bits = addr.bits;
-
-	//  install any recent index arrivals from another process/thread
-
-	installIndexes(docHndl);
 
 	//	add keys for the document
 	//	enumerate docHndl children (e.g. indexes)

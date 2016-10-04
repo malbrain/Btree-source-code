@@ -112,8 +112,20 @@ typedef struct {
 	char *infile;
 	void **database;
 	int bits, xtra, onDisk;
-	int num;
+	int num, idxtype;
 } ThreadArg;
+
+char *idxNames[] = {
+"ARTreeIdx",
+"Btree1Idx",
+"Btree2Idx"
+};
+
+ArenaType idxType[] = {
+ARTreeIndexType,
+Btree1IndexType,
+Btree2IndexType
+};
 
 //  standalone program to index file of keys
 //  then list them onto std-out
@@ -133,11 +145,16 @@ KeySpec keySpec[1];
 void *docStore[1];
 void *cursor[1];
 void *index[1];
+ArenaType idxtype;
+char *idxname;
 Document *doc;
 ObjId objId;
 ObjId txnId;
 int stat;
 FILE *in;
+
+	idxtype = idxType[args->idxtype];
+	idxname = idxNames[args->idxtype];
 
 	txnId.bits = 0;
 	params[OnDisk].boolVal = args->onDisk;
@@ -167,7 +184,8 @@ FILE *in;
 
 		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
 
-		createIndex(index, docStore, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
+		createIndex(index, docStore, idxtype, idxname, strlen(idxname), keySpec, sizeof(keySpec), params);
+		addIndexKeys(docStore);
 
 		if( in = fopen (args->infile, "rb") )
 		  while( ch = getc(in), ch != EOF )
@@ -196,7 +214,7 @@ FILE *in;
 
 		keySpec->type = wholeRec;
 
-		createIndex(index, NULL, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
+		createIndex(index, NULL, idxtype, idxname, strlen(idxname), keySpec, sizeof(keySpec), params);
 
 		if( in = fopen (args->infile, "r") )
 		  while( ch = getc(in), ch != EOF )
@@ -241,7 +259,9 @@ FILE *in;
 
 		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
 
-		createIndex(index, docStore, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
+		createIndex(index, docStore, idxtype, idxname, strlen(idxname), keySpec, sizeof(keySpec), params);
+		addIndexKeys(docStore);
+
 		createCursor (cursor, index, txnId);
 
 	  	while (nextDoc(cursor, &doc) == OK) {
@@ -258,7 +278,9 @@ FILE *in;
 
 		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
 
-		createIndex(index, docStore, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
+		createIndex(index, docStore, idxtype, idxname, strlen(idxname), keySpec, sizeof(keySpec), params);
+		addIndexKeys(docStore);
+
 		createCursor (cursor, index, txnId);
 
 	  	while (prevDoc(cursor, &doc) == OK) {
@@ -274,7 +296,9 @@ FILE *in;
 		fprintf(stderr, "started counting\n");
 
 		openDocStore(docStore, args->database, "documents", strlen("documents"), params);
-		createIndex(index, docStore, Btree1IndexType, "Btree1", strlen("Btree1"), keySpec, sizeof(keySpec), params);
+		createIndex(index, docStore, idxtype, idxname, strlen(idxname), keySpec, sizeof(keySpec), params);
+		addIndexKeys(docStore);
+
 		createCursor (cursor, index, txnId);
 
 	  	while (nextDoc(cursor, &doc) == OK)
@@ -297,6 +321,7 @@ int main (int argc, char **argv)
 {
 int idx, cnt, len, slot, err;
 int xtra = 0, bits = 16;
+int idxtype = 0;
 double start, stop;
 #ifdef unix
 pthread_t *threads;
@@ -319,9 +344,10 @@ void *index[1];
 	fprintf(stderr, "PageSize: %d, # Processors: %d, Allocation Granularity: %d\n\n", info->dwPageSize, info->dwNumberOfProcessors, info->dwAllocationGranularity);
 #endif
 	if( argc < 3 ) {
-		fprintf (stderr, "Usage: %s db_name cmds [page_bits leaf_xtra on_disk src_file1 src_file2 ... ]\n", argv[0]);
+		fprintf (stderr, "Usage: %s db_name cmds [idx_type page_bits leaf_xtra on_disk src_file1 src_file2 ... ]\n", argv[0]);
 		fprintf (stderr, "  where db_name is the prefix name of the database file\n");
 		fprintf (stderr, "  cmds is a string of (c)ount/(r)ev scan/(w)rite/(s)can/(d)elete/(f)ind/(p)ennysort, with one character command for each input src_file. Commands with no input file need a placeholder.\n");
+		fprintf (stderr, "  idx_type is the type of index: 0 = ART, 1 = btree1, 2 = btree2\n");
 		fprintf (stderr, "  page_bits is the btree page size in bits\n");
 		fprintf (stderr, "  leaf_xtra is the btree leaf page extra bits\n");
 		fprintf (stderr, "  on_disk is 1 for OnDisk, 0 for InMemory\n");
@@ -334,16 +360,19 @@ void *index[1];
 	start = getCpuTime(0);
 
 	if( argc > 3 )
-		bits = atoi(argv[3]);
+		idxtype = atoi(argv[3]);
 
 	if( argc > 4 )
-		xtra = atoi(argv[4]);
+		bits = atoi(argv[4]);
 
 	if( argc > 5 )
-		onDisk = atoi(argv[5]);
+		xtra = atoi(argv[5]);
 
-	if (argc > 6)
-		cnt = argc - 6;
+	if( argc > 6 )
+		onDisk = atoi(argv[6]);
+
+	if (argc > 7)
+		cnt = argc - 7;
 	else
 		cnt = 0;
 
@@ -362,8 +391,9 @@ void *index[1];
 	idx = 0;
 
 	do {
-	  args[idx].infile = argv[idx + 6];
+	  args[idx].infile = argv[idx + 7];
 	  args[idx].database = database;
+	  args[idx].idxtype = idxtype;
 	  args[idx].onDisk = onDisk;
 	  args[idx].type = argv[2];
 	  args[idx].bits = bits;
@@ -371,7 +401,7 @@ void *index[1];
 	  args[idx].num = num;
 	  args[idx].idx = idx;
 
-	  if (cnt) {
+	  if (cnt > 1) {
 #ifdef unix
 		if( err = pthread_create (threads + idx, NULL, index_file, args + idx) )
 		  fprintf(stderr, "Error creating thread %d\n", err);
@@ -381,24 +411,25 @@ void *index[1];
 
 #endif
 		continue;
-	  }
+	  } else
+	  	//  if zero or one files specified,
+	  	//  run index_file once
 
-	  //  if not files specified,
-	  //  run index_file once
-
-	  index_file (args);
-
+	  	index_file (args);
 	} while (++idx < cnt);
 
 	// 	wait for termination
 
 #ifdef unix
-	for( idx = 0; idx < cnt; idx++ )
+	if (cnt > 1)
+	  for( idx = 0; idx < cnt; idx++ )
 		pthread_join (threads[idx], NULL);
 #else
-	WaitForMultipleObjects (cnt, threads, TRUE, INFINITE);
+	if (cnt > 1)
+	  WaitForMultipleObjects (cnt, threads, TRUE, INFINITE);
 
-	for( idx = 0; idx < cnt; idx++ )
+	if (cnt > 1)
+	  for( idx = 0; idx < cnt; idx++ )
 		CloseHandle(threads[idx]);
 #endif
 

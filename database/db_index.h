@@ -34,3 +34,4 @@ typedef struct {
 #define dbcursor(map) ((DbCursor *)(map->arena + 1))
 
 Status storeDoc(DocHndl *docHndl, Handle *hndl, void *obj, uint32_t objSize, ObjId *result, ObjId txnId);
+Status installIndexes(DocHndl *docHndl);

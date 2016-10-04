@@ -14,7 +14,7 @@ typedef enum {
 } ReturnState;
 
 Status artDeleteKey(Handle *index, ArtCursor *cursor) {
-DbAddr *slot, newSlot;
+DbAddr newSlot;
 ReturnState rt;
 uint32_t bit;
 uint8_t ch;
@@ -28,7 +28,6 @@ uint8_t ch;
 		bool retry = true;
 
 		ch = stack->ch;
-		slot = stack->addr;
 
 		//	wait if we run into a dead slot
 		do {
@@ -38,11 +37,11 @@ uint8_t ch;
 				pass = 1;
 
 			// obtain write lock on the node
-			lockLatch(slot->latch);
+			lockLatch(stack->addr->latch);
 			newSlot.bits = stack->addr->bits;
 
-			if ((retry = newSlot.dead))
-				unlockLatch(slot->latch);
+			if ((retry = !newSlot.alive))
+				unlockLatch(stack->addr->latch);
 
 		} while (retry);
 
@@ -51,18 +50,31 @@ uint8_t ch;
 				rt = EndSearch;
 				break;
 			}
+			case KeyPass: {
+				DbAddr slot;
+				slot.bits = 0;
+				*slot.latch = KeyEnd | ALIVE_BIT;
+				stack->addr->bits = slot.bits;
+
+				if (!addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
+					rt = ErrorSearch;
+				else
+					rt = EndSearch;
+				break;
+			}
+
 			case KeyEnd: {
 				rt = EndSearch;
 				break;
 			}
 
 			case SpanNode: {
-				kill_slot(slot->latch);
+				stack->addr->bits = 0;
 
 				if (!addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
 					rt = ErrorSearch;
 				else
-					rt = ContinueSearch;
+					continue;
 
 				break;
 			}
@@ -89,16 +101,15 @@ uint8_t ch;
 					break;
 				}
 
-				kill_slot(slot->latch);
+				stack->addr->bits = 0;
 
-				if (!addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot)) {
-					rt = ErrorSearch;
-					break;
-				}
+				if (addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
+					continue;
 
-				rt = ContinueSearch;
+				rt = ErrorSearch;
 				break;
 			}
+
 			case Array14: {
 				ARTNode14 *node = getObj(index->map, *stack->addr);
 
@@ -122,13 +133,12 @@ uint8_t ch;
 					break;
 				}
 
-				kill_slot(slot->latch);
+				stack->addr->bits = 0;
 
-				if (!addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
-					rt = ErrorSearch;
-				else
-					rt = ContinueSearch;
+				if (addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
+					continue;
 
+				rt = ErrorSearch;
 				break;
 			}
 
@@ -149,13 +159,12 @@ uint8_t ch;
 					break;
 				}
 
-				kill_slot(slot->latch);
+				stack->addr->bits = 0;
 
-				if (!addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
-					rt = ErrorSearch;
-				else
-					rt = ContinueSearch;
+				if (addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
+					continue;
 
+				rt = ErrorSearch;
 				break;
 			}
 
@@ -163,42 +172,33 @@ uint8_t ch;
 				ARTNode256 *node = getObj(index->map, *stack->addr);
 				bit = ch;
 
-				if (~node->alloc[bit / 64] & (1ULL << (bit % 64))) {
+				// is radix slot empty?
+				if (!node->radix[bit].type) {
 					rt = EndSearch;
 					break;
 				}
 
-				node->alloc[bit / 64] &= ~(1ULL << (bit % 64));
-
-				if (node->alloc[0] | node->alloc[1] | node->alloc[2] | node->alloc[3]) {
+				// was this the last used slot?
+				if (--stack->addr->nslot) {
 					rt = EndSearch;
 					break;
 				}
 
-				kill_slot(slot->latch);
+				// remove the slot
+				stack->addr->bits = 0;
 
-				if (!addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
-					rt = ErrorSearch;
-				else
-					rt = ContinueSearch;
+				if (addSlotToFrame(index->map, index->list[newSlot.type].tail, newSlot))
+					continue;
 
+				rt = ErrorSearch;
 				break;
 			}
 		}	// end switch
 
 		unlockLatch(stack->addr->latch);
-
-		if (rt == ContinueSearch)
-			continue;
-
 		break;
 
 	}	// end while
-
-	//	zero out root?
-
-	if (!cursor->depth && rt == ContinueSearch)
-		slot->bits = 0;
 
 	atomicAdd64(artIndexAddr(index->map)->numEntries, -1);
 	return OK;

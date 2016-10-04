@@ -229,14 +229,6 @@ uint64_t compareAndSwap(uint64_t* target, uint64_t compare_val, uint64_t swap_va
 #endif
 }
 
-void kill_slot(volatile char *latch) {
-#ifndef _WIN32
-	__sync_fetch_and_or(latch, DEAD_BIT);
-#else
-	_InterlockedOr8(latch, DEAD_BIT);
-#endif
-}
-
 #ifdef _WIN32
 void lockArena (DbMap *map) {
 OVERLAPPED ovl[1];

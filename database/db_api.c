@@ -269,6 +269,15 @@ Status rollbackTxn(void **hndl, ObjId txnId);
 
 Status commitTxn(void **hndl, ObjId txnId);
 
+Status addIndexKeys(void **dochndl) {
+DocHndl *docHndl;
+
+	if (!(docHndl = *dochndl))
+		return ERROR_handleclosed;
+
+	return installIndexes(docHndl);
+}
+
 Status addDocument(void **dochndl, void *obj, uint32_t objSize, ObjId *result, ObjId txnId) {
 DocHndl *docHndl;
 Handle *hndl;

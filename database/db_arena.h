@@ -6,9 +6,9 @@
 #endif
 
 #define MAX_segs  1000
-#define MIN_segbits  17
+#define MIN_segbits	 17
 #define MIN_segsize  (1ULL << MIN_segbits)
-#define MAX_segbits  (32 + 3)  // 32 bit offset and 3 bits multiplier
+#define MAX_segsize  (1ULL << (32 + 3))  // 32 bit offset and 3 bit multiplier
 
 #define MAX_path  4096
 #define MAX_blk		49	// max arena blk size in half bits
@@ -51,7 +51,6 @@ struct DbArena_ {
 	uint32_t objSize;			// size of object array element
 	uint16_t currSeg;			// index of highest segment
 	uint16_t objSeg;			// current segment index for ObjIds
-	uint8_t segBits;			// segment size in bits
 	char mutex[1];				// arena allocation lock/drop flag
 	char type[1];				// arena type
 };

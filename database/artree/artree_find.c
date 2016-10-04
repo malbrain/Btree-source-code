@@ -36,7 +36,7 @@ DbAddr newSlot[1];
 		stack = cursor->stack + cursor->depth;
 
 		while (offset < keylen) {
-			if (slot->dead) {
+			if (!slot->alive) {
 				restart = true;
 				break;
 			}
@@ -48,9 +48,15 @@ DbAddr newSlot[1];
 			stack->ch = -1;
 
 			newSlot->bits = slot->bits;
-			spanMax = SPANLEN(slot->type);
+			spanMax = slot->nslot;
 
 			switch (slot->type < SpanNode ? slot->type : SpanNode) {
+				case KeyPass: {
+                	ARTSplice* splice = getObj(index, *slot);
+					slot = splice->next;
+					continue;
+				}
+
 				case KeyEnd: {
 					break;
 				}
@@ -92,7 +98,6 @@ DbAddr newSlot[1];
                    	cursor->keySize += spanMax;
 					slot = spanNode->next;
 					offset += spanMax;
-					stack->ch = 0;
 					continue;
             	}
 
@@ -185,20 +190,21 @@ DbAddr newSlot[1];
 				case Array256: {
 					ARTNode256* node = getObj(index, *slot);
 					idx = key[offset];
+					slot = node->radix + idx;  // slot points to child node
 
-					if (node->alloc[idx / 64] & (1ULL << (idx % 64))) {
+					if (slot->type) {
 						cursor->key[cursor->keySize++] = idx;
-						slot = node->radix + idx;  // slot points to child node
 						stack->ch = idx;
 						offset++;			// update key byte offset
 						continue;
 					}
 
 					// key byte not found
+					//	advance to next occupied radix entry
 
 					while (stack->ch < 256) {
 						idx = ++stack->ch;
-						if (idx < 256 && node->alloc[idx / 64] & (1ULL << (idx % 64)))
+						if (idx < 256 && (++slot)->type)
 							break;
 					}
 

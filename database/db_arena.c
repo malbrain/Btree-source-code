@@ -16,7 +16,6 @@
 
 extern DbMap memMap[1];
 
-DbMap *initMap (DbMap *map, ArenaDef *arenaDef);
 bool mapSeg (DbMap *map, uint32_t currSeg);
 void mapZero(DbMap *map, uint64_t size);
 void mapAll (DbMap *map);
@@ -131,8 +130,7 @@ int32_t amt = 0;
 #else
 		map->hndl = -1;
 #endif
-		initMap(map, arenaDef);
-		return map;
+		return initMap(map, arenaDef);
 	}
 
 	//	open the onDisk arena file
@@ -181,8 +179,8 @@ int32_t amt = 0;
 	}
 #endif
 	if (amt < sizeof(DbArena)) {
-		initMap(map, arenaDef);
-		unlockArena(map);
+		if ((map = initMap(map, arenaDef)))
+			unlockArena(map);
 		return map;
 	}
 
@@ -200,7 +198,7 @@ int32_t amt = 0;
 	if (parent)
 		map->arenaDef = arenaDef;
 	else
-		map->arenaDef = getObj(map, *map->arena->arenaDef);
+		map->arenaDef = getObj(map->db, *map->arena->arenaDef);
 
 	unlockArena(map);
 
@@ -242,12 +240,13 @@ uint32_t bits;
 	initSize = 1ULL << bits;
 
 #ifndef _WIN32
-	if (ftruncate(map->hndl, initSize)) {
+	if (map->hndl != -1)
+	  if (ftruncate(map->hndl, initSize)) {
 		fprintf (stderr, "Unable to initialize file %s, error = %d", map->path, errno);
 		close(map->hndl);
 		db_free(map);
 		return NULL;
-	}
+	  }
 #endif
 
 	//  initialize new arena segment zero
@@ -256,7 +255,7 @@ uint32_t bits;
 	map->arena->segs[map->arena->currSeg].nextObject.offset = segOffset >> 3;
 	map->arena->objSize = arenaDef->objSize;
 	map->arena->segs->size = initSize;
-	map->arena->segBits = bits;
+	*map->arena->mutex = ALIVE_BIT;
 	map->arena->delTs = 1;
 
 	//	do we have a parent?
@@ -266,8 +265,8 @@ uint32_t bits;
 		return map;
 	}
 
-	map->arena->arenaDef->bits = allocBlk(map, sizeof(ArenaDef), false);
-	map->arenaDef = getObj(map, *map->arena->arenaDef);
+	map->arena->arenaDef->bits = allocBlk(map->db, sizeof(ArenaDef), false);
+	map->arenaDef = getObj(map->db, *map->arena->arenaDef);
 	memcpy(map->arenaDef, arenaDef, sizeof(ArenaDef));
 	return map;
 }
@@ -292,36 +291,25 @@ uint32_t nextSeg = map->arena->currSeg + 1;
 uint64_t nextSize;
 
 	off += size;
+	nextSize = off * 2;
 
-	// bootstrapping new inMem arena?
-
-	if (map->arena->segBits == 0) {
-		map->arena->segBits = MIN_segbits - 1;
-		nextSize = MIN_segsize;
-		nextSeg = 0;
-	} else
-		nextSize = 1ULL << map->arena->segBits;
-
-	while (nextSize < minSize)
-	 	if (map->arena->segBits++ < MAX_segbits)
-			nextSize += nextSeg ? 1ULL << map->arena->segBits : nextSize;
+	while (nextSize - off < minSize)
+	 	if (nextSize - off <= MAX_segsize)
+			nextSize += nextSize;
 		else
 			fprintf(stderr, "newSeg segment overrun: %d\n", minSize), exit(1);
 
-	if (map->arena->segBits < MAX_segbits)
-		map->arena->segBits++;
-
-	if (nextSize > 1ULL << MAX_segbits)
-		nextSize = 1ULL << MAX_segbits;
+	if (nextSize - off > MAX_segsize)
+		nextSize = off - MAX_segsize;
 
 #ifdef _WIN32
-	assert(__popcnt64(off + nextSize) == 1);
+	assert(__popcnt64(nextSize) == 1);
 #else
-	assert(__builtin_popcountll(off + nextSize) == 1);
+	assert(__builtin_popcountll(nextSize) == 1);
 #endif
 
 	map->arena->segs[nextSeg].off = off;
-	map->arena->segs[nextSeg].size = nextSize;
+	map->arena->segs[nextSeg].size = nextSize - off;
 	map->arena->segs[nextSeg].nextId.seg = nextSeg;
 	map->arena->segs[nextSeg].nextObject.segment = nextSeg;
 	map->arena->segs[nextSeg].nextObject.offset = nextSeg ? 0 : 1;
@@ -329,9 +317,9 @@ uint64_t nextSize;
 	//  extend the disk file, windows does this automatically
 
 #ifndef _WIN32
-	if (map->hndl >= 0)
-	  if (ftruncate(map->hndl, (off + nextSize))) {
-		fprintf (stderr, "Unable to initialize file %s, error = %d", map->path, errno);
+	if (map->hndl != -1)
+	  if (ftruncate(map->hndl, nextSize)) {
+		fprintf (stderr, "Unable to extend file %s to %ULL, error = %d", map->path, nextSize, errno);
 		return false;
 	  }
 #endif
@@ -366,8 +354,8 @@ DbAddr slot;
 
 		// implement half-bit sizing
 
-		if (bits > 4 && (~amt & (1 << (bits - 2))))
-			size -= 1 << (bits - 2);
+		if (bits > 4 && amt <= 3 * size / 4)
+			size -= size / 4;
 		else
 			type++;
 
@@ -401,6 +389,7 @@ DbAddr slot;
 			fprintf(stderr, "allocObj segment overrun\n"), exit(1);
 	}
 
+	slot.alive = 1;
 	slot.type = type;
 	return slot.bits;
 }

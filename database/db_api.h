@@ -23,3 +23,4 @@ Status addDocument(void **hndl, void *obj, uint32_t objSize, ObjId *objId, ObjId
 Status insertKey(void **index, uint8_t *key, uint32_t len);
 Status nextDoc(void **hndl, Document **doc);
 Status prevDoc(void **hndl, Document **doc);
+Status addIndexKeys(void **dochndl);

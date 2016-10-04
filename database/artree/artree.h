@@ -5,16 +5,24 @@
 // Artree interior nodes
 
 enum ARTNodeType {
-	UnusedSlot = 0,					// slot is not yet in use
-	Array4,							// node contains 4 radix slots
-	Array14,						// node contains 14 radix slots
-	Array64,						// node contains 64 radix slots
-	Array256,						// node contains 256 radix slots
-	KeyEnd,							// node end of the complete key
-	SpanNode,						// node contains up to 8 key bytes
-	SpanNode256 = SpanNode + 16,	// node spans up to 256 bytes
-	MaxARTType = SpanNode256 + 4	// node spans up to 1024 bytes
+	UnusedSlot = 0,					// 0: slot is not yet in use
+	Array4,							// 1: node contains 4 radix slots
+	Array14,						// 2: node contains 14 radix slots
+	Array64,						// 3: node contains 64 radix slots
+	Array256,						// 4: node contains 256 radix slots
+	KeyEnd,							// 5: node end of a key w/o another
+	KeyPass,						// 6: node key end splice into longer key
+	SpanNode,						// 7: node contains up to 8 key bytes
+	MaxARTType = SpanNode + 16		//23: node spans up to 256 bytes
 };
+
+/**
+ * key is a prefix of another longer key
+ */
+
+typedef struct {
+	DbAddr next[1];
+} ARTSplice;
 
 /**
  * radix node with four slots and their key bytes
@@ -56,7 +64,6 @@ typedef struct {
 
 typedef struct {
 	uint64_t timestamp;
-	volatile uint64_t alloc[4];
 	DbAddr radix[256];
 } ARTNode256;
 
@@ -74,8 +81,6 @@ typedef struct {
 /**
  * Span node base length calc
  */
-
-#define SPANLEN(type) (type > SpanNode ? (type < SpanNode256 ? 0 : ((type - SpanNode256) + 1) << 8 ) : 0)
 
 typedef struct {
 	DbIndex base[1];	// basic db index
