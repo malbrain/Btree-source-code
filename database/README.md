@@ -9,53 +9,49 @@ The runtime options are:
 
     Usage: dbtest db_name cmds idx_type [page_bits leaf_xtra on_disk src_file1 src_file2 ... ]
       where db_name is the prefix name of the database file
-      cmds is a string of (c)ount/(r)ev scan/(w)rite/(s)can/(d)elete/(f)ind/(p)ennys ort, with one character command for each input src_file. Commands with no input file need a placeholder.
+      cmds is a string of (c)ount/(r)ev scan/(w)rite/(s)can/(d)elete/(f)ind/(p)ennysort, with one character command for each input src_file.
       idx_type is 0 for ARTree or 1 for btree
       page_bits is the btree page size in bits
       leaf_xtra is the btree leaf page extra bits
       on_disk is 1 for OnDisk, 0 for InMemory
       src_file1 thru src_filen are files of keys separated by newline
 
-Sample output from indexing/persisting 10M complete pennysort records (cmd 'w'):
+Linux compilation command:
 
-    [root@test7x64 xlink]# cc -O3 -g -o dbtest database/*.c artree/*.c btree1/*.c -lpthread
-    [root@test7x64 xlink]# ./dbtest tstdb w 1 14 0 1 penny0
-    started indexing for penny0
-     real 0m42.706s
-     user 0m40.067s
-     sys  0m2.673s
+    [root@test7x64 xlink]# cc -O3 -g -o dbtest db*.c artree/*.c btree1/*.c -lpthread
 
-    -rw-r--r-- 1 root root    1048576 Sep 16 22:21 tstdb
-    -rw-r--r-- 1 root root    1048576 Sep 16 22:21 tstdb.documents
-    -rw-r--r-- 1 root root 2147483648 Sep 16 22:22 tstdb.documents.Btree1Idx
+Sample single thread output from indexing 40M pennysort keys (cmd 'w'):
 
-Sample output from storing/indexing/persisting 10M pennysort records (1GB):
+    [root@test7x64 xlink]# ./dbtest tstdb w 0 14 0 1 pennykeys0-3
+    started indexing for pennykeys0-3
+     real 0m33.022s
+     user 0m28.067s
+     sys  0m4.048s
 
-    [root@test7x64 xlink]# ./dbtest tstdb p 1 13 0 1 penny0
-    started pennysort insert for penny0
-     real 0m28.211s
-     user 0m25.218s
-     sys  0m2.023s
+    -rw-r--r-- 1 root root 4294967296 Sep 16 22:22 ARTreeIdx
 
-    -rw-r--r-- 1 root root    1048576 Sep 16 22:19 tstdb
-    -rw-r--r-- 1 root root 2147483648 Sep 16 22:19 tstdb.documents
-    -rw-r--r-- 1 root root  536870912 Sep 16 22:19 tstdb.documents.Btree1Idx
+Sample multiple thread output from indexing 40M pennysort keys (cmd 'w'):
 
-Sample output from indexing/persisting 10M complete pennysort records (cmd 'w') InMemory:
+    [root@test7x64 xlink]# ./dbtest tstdb w 0 14 0 1 pennykeys[0123]
+    started indexing for pennykeys0
+    started indexing for pennykeys1
+    started indexing for pennykeys2
+    started indexing for pennykeys3
+     real 0m14.716s
+     user 0m41.705s
+     sys  0m12.839s
 
-    [root@test7x64 xlink]# ./dbtest tstdb w 1 14 0 0 penny0
-    started indexing for penny0
-     real 0m40.065s
-     user 0m38.730s
-     sys  0m1.368s
+Sample output from storing/indexing/persisting 40M pennysort records (4GB):
 
-Sample output from storing/indexing/persisting 10M pennysort records (1GB) inMemory:
+    [root@test7x64 xlink]# ./dbtest tstdb p 0 13 0 1 penny0-3
+    started pennysort insert for penny0-3
+     real 1m53.100s
+     user 0m55.810s
+     sys  0m15.550s
 
-    [root@test7x64 xlink]# ./dbtest tstdb p 1 14 0 0 penny0
-    started pennysort insert for penny0
-     real 0m35.829s
-     user 0m34.863s
-     sys  0m0.987s
+    -rw-rw-r-- 1 karl karl    4194304 Oct  5 06:41 tstdb
+    -rw-rw-r-- 1 karl karl 8589934592 Oct  5 06:43 tstdb.documents
+    -rw-rw-r-- 1 karl karl 4294967296 Oct  5 06:43 tstdb.documents.ARTreeIdx
 
 Sample output with four concurrent threads each storing 10M pennysort records:
 
