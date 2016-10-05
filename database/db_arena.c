@@ -164,6 +164,9 @@ int32_t amt = 0;
 
 	lockArena(map);
 
+#ifdef DEBUG
+	fprintf(stderr, "lockArena %s\n", map->path);
+#endif
 	// read first part of segment zero if it exists
 
 	segZero = valloc(sizeof(DbArena));
@@ -172,8 +175,9 @@ int32_t amt = 0;
 
 	if (amt < 0) {
 		fprintf (stderr, "Unable to read %d bytes from %s, error = %d", (int)sizeof(DbArena), map->path, errno);
-		free(segZero);
+		unlockArena(map);
 		close(map->hndl);
+		free(segZero);
 		db_free(map);
 		return NULL;
 	}
@@ -185,6 +189,8 @@ int32_t amt = 0;
 	}
 
 	//  since segment zero exists, map the arena
+
+	assert(segZero->segs->size > 0);
 
 	mapZero(map, segZero->segs->size);
 #ifdef _WIN32
@@ -200,6 +206,9 @@ int32_t amt = 0;
 	else
 		map->arenaDef = getObj(map->db, *map->arena->arenaDef);
 
+#ifdef DEBUG
+	fprintf(stderr, "unlockArena %s\n", map->path);
+#endif
 	unlockArena(map);
 
 	// wait for initialization to finish
@@ -229,6 +238,9 @@ uint32_t bits;
 	initSize += 65535;
 	initSize &= -65536;
 
+#ifdef DEBUG
+	fprintf(stderr, "InitMap %s at %llu bytes\n", map->path, initSize);
+#endif
 #ifdef _WIN32
 	_BitScanReverse((unsigned long *)&bits, initSize - 1);
 	bits++;
@@ -250,6 +262,8 @@ uint32_t bits;
 #endif
 
 	//  initialize new arena segment zero
+
+	assert(initSize > 0);
 
 	mapZero(map, initSize);
 	map->arena->segs[map->arena->currSeg].nextObject.offset = segOffset >> 3;
@@ -274,6 +288,8 @@ uint32_t bits;
 //  initialize arena segment zero
 
 void mapZero(DbMap *map, uint64_t size) {
+
+	assert(size > 0);
 
 	map->arena = mapMemory (map, 0, size, 0);
 	map->base[0] = (char *)map->arena;
@@ -470,6 +486,8 @@ uint64_t max, addr;
 bool mapSeg (DbMap *map, uint32_t currSeg) {
 uint64_t size = map->arena->segs[currSeg].size;
 uint64_t off = map->arena->segs[currSeg].off;
+
+	assert(size > 0);
 
 	if ((map->base[currSeg] = mapMemory (map, off, size, currSeg)))
 		return true;

@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/file.h>
 #include <errno.h>
 #include <sched.h>
 
@@ -244,13 +245,8 @@ OVERLAPPED ovl[1];
 }
 #else
 void lockArena (DbMap *map) {
-struct flock lock[1];
 
-	memset (lock, 0, sizeof(lock));
-	lock->l_len = sizeof(DbArena);
-	lock->l_type = F_WRLCK;
-
-	if (!fcntl(map->hndl, F_SETLKW, lock))
+	if (!flock(map->hndl, LOCK_EX))
 		return;
 
 	fprintf (stderr, "Unable to lock %s, error = %d", map->path, errno);
@@ -273,13 +269,7 @@ OVERLAPPED ovl[1];
 }
 #else
 void unlockArena (DbMap *map) {
-struct flock lock[1];
-
-	memset (lock, 0, sizeof(lock));
-	lock->l_len = sizeof(DbArena);
-	lock->l_type = F_UNLCK;
-
-	if (!fcntl(map->hndl, F_SETLKW, lock))
+	if (!flock(map->hndl, LOCK_UN))
 		return;
 
 	fprintf (stderr, "Unable to unlock %s, error = %d", map->path, errno);

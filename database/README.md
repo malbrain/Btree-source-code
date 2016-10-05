@@ -30,7 +30,7 @@ Sample single thread output from indexing 40M pennysort keys (cmd 'w'):
 
     -rw-r--r-- 1 root root 4294967296 Sep 16 22:22 ARTreeIdx
 
-Sample multiple thread output from indexing 40M pennysort keys (cmd 'w'):
+Sample four thread output from indexing 40M pennysort keys (cmd 'w'):
 
     [root@test7x64 xlink]# ./dbtest tstdb w 0 14 0 1 pennykeys[0123]
     started indexing for pennykeys0
@@ -40,6 +40,29 @@ Sample multiple thread output from indexing 40M pennysort keys (cmd 'w'):
      real 0m14.716s
      user 0m41.705s
      sys  0m12.839s
+
+Sample single thread output from indexing 80M pennysort keys (cmd 'w'):
+
+    [karl@test7x64 xlink]$ ./dbtest tstdb w 0 14 0 1 pennykey0-7
+    started indexing for pennykey0-7
+     real 1m29.627s
+     user 1m10.717s
+     sys  0m10.965s
+
+Sample eight thread output from indexing 80M pennysort keys (cmd 'w'):
+
+    [karl@test7x64 xlink]$  ./dbtest tstdb w 0 14 0 1 pennykey[01234567]
+    started indexing for pennykey0
+    started indexing for pennykey1
+    started indexing for pennykey2
+    started indexing for pennykey3
+    started indexing for pennykey4
+    started indexing for pennykey5
+    started indexing for pennykey6
+    started indexing for pennykey7
+     real 0m46.590s
+     user 1m51.374s
+     sys  1m3.939s
 
 Sample output from storing/indexing/persisting 40M pennysort records (4GB):
 
