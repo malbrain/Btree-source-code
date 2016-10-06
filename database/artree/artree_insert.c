@@ -17,6 +17,7 @@ typedef struct {
 	uint32_t keylen;	// length of the key
 	uint32_t depth;		// current tree depth
 	uint32_t off;	 	// progress down the key bytes
+	uint8_t ch;			// current key character
 } ParamStruct;
 
 typedef enum {
@@ -121,6 +122,7 @@ DbAddr slot;
 		while (p->off < p->keylen) {
 			ReturnState rt = ContinueSearch;
 			p->oldSlot->bits = p->slot->bits | ADDR_MUTEX_SET;
+			p->ch = p->key[p->off];
 			p->prev = p->slot;
 
 			switch (p->oldSlot->type < SpanNode ? p->oldSlot->type : SpanNode) {
@@ -275,15 +277,15 @@ ARTSplice *splice;
 ReturnState insertKeyNode4(ARTNode4 *node, ParamStruct *p) {
 ARTNode14 *radix14Node;
 uint32_t idx, out;
+uint8_t bits;
 
-	for (idx = 0; idx < 4; idx++) {
-		if (node->alloc & (1 << idx))
-			if (p->key[p->off] == node->keys[idx]) {
-				p->slot = node->radix + idx;
-				p->off++;
-				return ContinueSearch;
-			}
-	}
+	for (bits = node->alloc, idx = 0; bits && idx < 4; bits /= 2, idx++)
+	  if (bits & 1)
+		if (p->ch == node->keys[idx]) {
+			p->slot = node->radix + idx;
+			p->off++;
+			return ContinueSearch;
+		}
 
 	// obtain write lock on the node
 
@@ -303,17 +305,17 @@ uint32_t idx, out;
 	}
 
 	// retry search under lock
-	for (idx = 0; idx < 4; idx++) {
-	  if (node->alloc & (1 << idx))
-		if (p->key[p->off] == node->keys[idx]) {
-			unlockLatch(p->slot->latch);
+
+	for (bits = node->alloc, idx = 0; bits && idx < 4; bits /= 2, idx++)
+	  if (bits & 1)
+		if (p->ch == node->keys[idx]) {
 			p->slot = node->radix + idx;
 			p->off++;
 			return ContinueSearch;
 		}
-	}
 
 	// add to radix4 node if room
+
 	if (node->alloc < 0xF) {
 #ifdef _WIN32
 		_BitScanForward((DWORD *)&idx, ~node->alloc);
@@ -321,9 +323,12 @@ uint32_t idx, out;
 		idx = __builtin_ctz(~node->alloc);
 #endif
 
-		node->keys[idx] = p->key[p->off++];
+		node->keys[idx] = p->ch;
+		p->off++;
+
 		if (!fillKey(p, node->radix + idx))
 			return ErrorSearch;
+
 		node->alloc |= 1 << idx;
 		return EndSearch;
 	}
@@ -363,7 +368,8 @@ uint32_t idx, out;
 	out = __builtin_ctz(~radix14Node->alloc);
 #endif
 
-	radix14Node->keys[out] = p->key[p->off++];
+	radix14Node->keys[out] = p->ch;
+	p->off++;
 
 	// fill in rest of the key in span nodes
 
@@ -377,15 +383,15 @@ uint32_t idx, out;
 ReturnState insertKeyNode14(ARTNode14 *node, ParamStruct *p) {
 ARTNode64 *radix64Node;
 uint32_t idx, out;
+uint16_t bits;
 
-	for (idx = 0; idx < 14; idx++) {
-	  if (node->alloc & (1 << idx))
-		if (p->key[p->off] == node->keys[idx]) {
+	for (bits = node->alloc, idx = 0; bits && idx < 14; bits /= 2, idx++)
+	  if (bits & 1)
+		if (p->ch == node->keys[idx]) {
 			p->slot = node->radix + idx;
 			p->off++;
 			return ContinueSearch;
 		}
-	}
 
 	// obtain write lock on the node
 
@@ -406,15 +412,13 @@ uint32_t idx, out;
 
 	//  retry search under lock
 
-	for (idx = 0; idx < 14; idx++) {
-	  if (node->alloc & (1 << idx))
-		if (p->key[p->off] == node->keys[idx]) {
-			unlockLatch(p->slot->latch);
+	for (bits = node->alloc, idx = 0; bits && idx < 14; bits /= 2, idx++)
+	  if (bits & 1)
+		if (p->ch == node->keys[idx]) {
 			p->slot = node->radix + idx;
 			p->off++;
 			return ContinueSearch;
 		}
-	}
 
 	// add to radix node if room
 
@@ -425,9 +429,12 @@ uint32_t idx, out;
 		idx = __builtin_ctz(~node->alloc);
 #endif
 
-		node->keys[idx] = p->key[p->off++];
+		node->keys[idx] = p->ch;
+		p->off++;
+
 		if (!fillKey(p, node->radix + idx))
 			return ErrorSearch;
+
 		node->alloc |= 1 << idx;
 		return EndSearch;
 	}
@@ -469,7 +476,8 @@ uint32_t idx, out;
 	out = __builtin_ctzl(~radix64Node->alloc);
 #endif
 
-	radix64Node->keys[p->key[p->off++]] = out;
+	radix64Node->keys[p->ch] = out;
+	p->off++;
 
 	// fill in rest of the key bytes into span nodes
 
@@ -481,20 +489,22 @@ uint32_t idx, out;
 }
 
 ReturnState insertKeyNode64(ARTNode64 *node, ParamStruct *p) {
-uint32_t idx = node->keys[p->key[p->off]], out;
+uint32_t idx = node->keys[p->ch], out;
 ARTNode256 *radix256Node;
 
-	if (idx < 0xff && node->alloc & (1ULL << idx)) {
+	if (idx < 0xff ) {
 		p->slot = node->radix + idx;
 		p->off++;
 		return ContinueSearch;
 	}
 
 	// obtain write lock on the node
+
 	lockLatch(p->slot->latch);
 
 	// restart if slot has been killed
 	// or node has changed.
+
 	if (!p->slot->alive) {
 		unlockLatch(p->slot->latch);
 		return RestartSearch;
@@ -506,8 +516,10 @@ ARTNode256 *radix256Node;
 	}
 
 	//  retry under lock
-	idx = node->keys[p->key[p->off]];
-	if (idx < 0xff && node->alloc & (1ULL << idx)) {
+
+	idx = node->keys[p->ch];
+
+	if (idx < 0xff ) {
 		unlockLatch(p->slot->latch);
 		p->slot = node->radix + idx;
 		p->off++;
@@ -515,14 +527,15 @@ ARTNode256 *radix256Node;
 	}
 
 	// if room, add to radix node
+
 	if (node->alloc < 0xffffffffffffffffULL) {
-		idx = p->key[p->off++];
 #ifdef _WIN32
 		_BitScanForward64((DWORD *)&out, ~node->alloc);
 #else
 		out = __builtin_ctzl(~node->alloc);
 #endif
-		node->keys[idx] = out;
+		node->keys[p->ch] = out;
+		p->off++;
 
 		if (!fillKey(p, node->radix + out))
 			return ErrorSearch;
@@ -532,6 +545,7 @@ ARTNode256 *radix256Node;
 	}
 
 	// the radix node is full, promote to the next larger size.
+
 	if ( (p->newSlot->bits = artAllocateNode(p->index, Array256, sizeof(ARTNode256))) )
 		radix256Node = getObj(p->index->map,*p->newSlot);
 	else
@@ -554,15 +568,15 @@ ARTNode256 *radix256Node;
 	// fill in the rest of the key bytes into Span nodes
 
 	p->newSlot->nslot++;
-	idx = p->key[p->off++];
-    return fillKey(p, radix256Node->radix + idx) ? EndSearch : ErrorSearch;
+
+    return fillKey(p, radix256Node->radix + p->key[p->off++]) ? EndSearch : ErrorSearch;
 }
 
 ReturnState insertKeyNode256(ARTNode256 *node, ParamStruct *p) {
-uint32_t idx = p->key[p->off];
-DbAddr *slot = node->radix + idx;
+DbAddr *slot = node->radix + p->ch;
 
 	//  is slot occupied?
+
 	if (slot->type) {
 		p->slot = slot;
 		p->off++;
@@ -570,10 +584,12 @@ DbAddr *slot = node->radix + idx;
 	}
 
 	// obtain write lock on the radix node
+
 	lockLatch(p->slot->latch);
 
 	// restart if slot has been killed
 	// or node has changed.
+
 	if (!p->slot->alive) {
 		unlockLatch(p->slot->latch);
 		return RestartSearch;
@@ -585,6 +601,7 @@ DbAddr *slot = node->radix + idx;
 	}
 
 	//  retry under lock
+
 	if (slot->type) {
 		unlockLatch(p->slot->latch);
 		p->slot = slot;
@@ -680,12 +697,14 @@ ARTNode4 *radix4Node;
 			return ErrorSearch;
 
 		// fill in first radix element with first of the remaining span bytes
+
 		radix4Node->timestamp = node->timestamp;
 		radix4Node->keys[0] = node->bytes[idx++];
 		radix4Node->alloc |= 1;
 		nxtSlot = radix4Node->radix + 0;
 
 		// fill in second radix element with next byte of our search key
+
 		radix4Node->keys[1] = p->key[p->off++];
 		radix4Node->alloc |= 2;
 		contSlot = radix4Node->radix + 1;
