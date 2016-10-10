@@ -131,11 +131,7 @@ void lockLatch(volatile char* latch) {
 }
 
 void unlockLatch(volatile char* latch) {
-#ifndef _WIN32
-	__sync_fetch_and_and(latch, ~MUTEX_BIT);
-#else
-	_InterlockedAnd8( latch, ~MUTEX_BIT);
-#endif
+	*latch = *latch & ~MUTEX_BIT;
 }
 
 int64_t atomicAdd64(volatile int64_t *value, int64_t amt) {
@@ -186,7 +182,7 @@ int flags = MAP_SHARED;
 		return NULL;
 	}
 #else
-	if (!map->onDisk)
+	if (map->hndl == INVALID_HANDLE_VALUE)
 		return VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
 
 	if (!(map->maphndl[segNo] = CreateFileMapping(map->hndl, NULL, PAGE_READWRITE, (DWORD)((offset + size) >> 32), (DWORD)(offset + size), NULL))) {
@@ -212,7 +208,7 @@ char *base = segNo ? map->base[segNo] : 0ULL;
 	munmap(base, map->arena->segs[segNo].size);
 	close (map->hndl);
 #else
-	if (!map->onDisk) {
+	if (!map->arenaDef->onDisk) {
 		VirtualFree(base, 0, MEM_RELEASE);
 		return;
 	}

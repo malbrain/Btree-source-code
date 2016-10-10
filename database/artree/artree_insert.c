@@ -109,7 +109,6 @@ DbAddr slot;
 		p->key = key;
 		p->index = index;
 		p->keylen = keylen;
-		p->newSlot->bits = 0;
 		p->slot = artIndexAddr(index->map)->root;
 
 		//  we encountered a dead node
@@ -123,6 +122,7 @@ DbAddr slot;
 			ReturnState rt = ContinueSearch;
 			p->oldSlot->bits = p->slot->bits | ADDR_MUTEX_SET;
 			p->ch = p->key[p->off];
+			p->newSlot->bits = 0;
 			p->prev = p->slot;
 
 			switch (p->oldSlot->type < SpanNode ? p->oldSlot->type : SpanNode) {
@@ -188,8 +188,6 @@ DbAddr slot;
 				continue;
 
 			case RestartSearch:
-				if (!p->depth)
-					return ARTREE_error;
 				restart = true;
 				break;
 
@@ -309,6 +307,7 @@ uint8_t bits;
 	for (bits = node->alloc, idx = 0; bits && idx < 4; bits /= 2, idx++)
 	  if (bits & 1)
 		if (p->ch == node->keys[idx]) {
+			unlockLatch(p->slot->latch);
 			p->slot = node->radix + idx;
 			p->off++;
 			return ContinueSearch;
@@ -415,6 +414,7 @@ uint16_t bits;
 	for (bits = node->alloc, idx = 0; bits && idx < 14; bits /= 2, idx++)
 	  if (bits & 1)
 		if (p->ch == node->keys[idx]) {
+			unlockLatch(p->slot->latch);
 			p->slot = node->radix + idx;
 			p->off++;
 			return ContinueSearch;

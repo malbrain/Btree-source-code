@@ -16,6 +16,7 @@ typedef enum {
 	ERROR_cursornotpositioned,
 	ERROR_invaliddeleterecord,
 	ERROR_cursorbasekeyerror,
+	ERROR_cursoroverflow,
 	ERROR_writeconflict,
 	ERROR_duplicatekey,
 	ERROR_keynotfound,
@@ -33,6 +34,7 @@ typedef enum {
 	ERROR_btreepagelatchnotfound,
 	ERROR_btreestruct,
 	ERROR_arenadropped,
+	ERROR_indextype,
 	BTREE_needssplit,
 	ARTREE_error,
 } Status;

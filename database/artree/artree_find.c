@@ -5,230 +5,177 @@
 #include "../db_map.h"
 #include "artree.h"
 
-int slot4x14(int ch, uint8_t max, uint32_t alloc, volatile uint8_t* keys);
-int slot64(int ch, uint64_t alloc, volatile uint8_t* keys);
-
-DbAddr *artFindNxtFld( DbMap *index, ArtCursor *cursor, DbAddr *slot, uint8_t *key, uint32_t keylen) {
-uint32_t startSize = cursor->keySize;
-uint32_t startDepth = cursor->depth;
+bool artFindKey( DbCursor *dbCursor, DbMap *index, uint8_t *key, uint32_t keyLen) {
+ArtCursor *cursor = (ArtCursor *)dbCursor;
 uint32_t idx, offset = 0, spanMax;
-bool restart = true;
-bool pass = false;
 CursorStack* stack;
-DbAddr newSlot[1];
+DbAddr *slot;
 
-	cursor->atLeftEOF = false;
+	if (cursor) {
+		cursor->atLeftEOF = false;
+		cursor->base->keyLen = 0;
+		cursor->depth = 0;
+	}
 
-	do {
-		restart = false;
-		cursor->keySize = startSize;
-		cursor->depth = startDepth;
+	// loop through the key bytes
 
-		//  if we are waiting on a dead bit to clear
+	slot = artIndexAddr(index)->root;
 
-		if (pass)
-			yield();
-		else
-			pass = true;
+	while (offset < keyLen) {
+		if (cursor)
+		  if (cursor->depth < MAX_cursor)
+			stack = cursor->stack + cursor->depth++;
+		  else
+			return false;
 
-		// loop through all the key bytes
+		if (cursor) {
+			stack->off = cursor->base->keyLen;
+			stack->slot->bits = slot->bits;;
+			stack->ch = key[offset];
+			stack->addr = slot;
+		}
 
-		stack = cursor->stack + cursor->depth;
+		switch (slot->type < SpanNode ? slot->type : SpanNode) {
+		  case KeyPass: {
+		   	ARTSplice* splice = getObj(index, *slot);
 
-		while (offset < keylen) {
-			if (!slot->alive) {
-				restart = true;
-				break;
+			slot = splice->next;
+
+			if (cursor)
+				stack->ch = 256;
+
+			continue;
+		  }
+
+		  case KeyEnd: {
+			memcpy (cursor->key, key, cursor->base->keyLen);
+			return false;
+		  }
+
+		  case SpanNode: {
+			ARTSpan* spanNode = getObj(index, *slot);
+			uint32_t amt = keyLen - offset;
+			int diff;
+
+			spanMax = slot->nbyte + 1;
+
+			if (amt > spanMax)
+				amt = spanMax;
+
+			diff = memcmp(key + offset, spanNode->bytes, amt);
+
+			//  does the key end inside the span?
+
+			if (spanMax > amt || diff) {
+			  if (cursor) {
+				if (diff <= 0)
+					stack->ch = -1;
+				else
+					stack->ch = 256;
+			  }
+
+			  break;
 			}
 
-			stack = &cursor->stack[cursor->depth++];
-			stack->slot->bits = slot->bits;
-			stack->addr = slot;
-			stack->off = cursor->keySize;
-			stack->ch = -1;
+			//  continue to the next slot
 
-			newSlot->bits = slot->bits;
-			spanMax = slot->nslot;
+			slot = spanNode->next;
+			offset += spanMax;
+			continue;
+		  }
 
-			switch (slot->type < SpanNode ? slot->type : SpanNode) {
-				case KeyPass: {
-                	ARTSplice* splice = getObj(index, *slot);
-					slot = splice->next;
-					continue;
-				}
+		  case Array4: {
+			ARTNode4 *node = getObj(index, *slot);
 
-				case KeyEnd: {
-					break;
-				}
+			// simple loop comparing bytes
 
-            	case SpanNode: {
-                	ARTSpan* spanNode = getObj(index, *slot);
-					uint32_t amt = keylen - offset;
-					int diff;
+			for (idx = 0; idx < 4; idx++)
+			  if (node->alloc & (1 << idx))
+				if (key[offset] == node->keys[idx])
+				  break;
 
-                	spanMax += stack->slot->nbyte + 1;
+			if (idx < 4) {
+			  slot = node->radix + idx;
+			  cursor->base->keyLen++;
+			  offset++;
+			  continue;
+			}
 
-					if (amt > spanMax)
-						amt = spanMax;
+			// key byte not found
 
-					diff = memcmp(key + offset, spanNode->bytes, amt);
+			break;
+		  }
 
-					//  is span size > key size?
+		  case Array14: {
+			ARTNode14 *node = getObj(index, *slot);
 
-					if (spanMax > amt) {
-					  if (diff <= 0)
-						stack->ch = -1;
-					  else
-						stack->ch = 256;
+			// simple loop comparing bytes
 
-					  break;
-					}
+			for (idx = 0; idx < 14; idx++)
+			  if (node->alloc & (1 << idx))
+				if (key[offset] == node->keys[idx])
+				  break;
 
-					//  does key end in the middle of the span?
-					//  if so, is the key larger or smaller?
+			if (idx < 14) {
+			  slot = node->radix + idx;
+			  cursor->base->keyLen++;
+			  offset++;
+			  continue;
+			}
 
-					if (diff) {
-						stack->ch = diff < 0 ? -1 : 256;
-						break;
-					}
+			// key byte not found
 
-                	//  copy key bytes and continue to the next slot
+			break;
+		  }
 
-                   	memcpy(cursor->key + cursor->keySize, spanNode->bytes, spanMax);
-                   	cursor->keySize += spanMax;
-					slot = spanNode->next;
-					offset += spanMax;
-					continue;
-            	}
+		  case Array64: {
+			ARTNode64* node = getObj(index, *slot);
+			idx = node->keys[key[offset]];
 
-				case Array4: {
-					ARTNode4 *node = getObj(index, *slot);
+			if (idx < 0xff && (node->alloc & (1ULL << idx))) {
+			  slot = node->radix + idx;
+			  cursor->base->keyLen++;
+			  offset++;
+			  continue;
+			}
 
-					// simple loop comparing bytes
+			// key byte not found
 
-					for (idx = 0; idx < 4; idx++) {
-						if (node->alloc & (1 << idx))
-							if (key[offset] == node->keys[idx])
-								break;
-					}
+			break;
+		  }
 
-					if (idx < 4) {
-						slot = node->radix + idx;  // slot points to child node
-						cursor->key[cursor->keySize++] = node->keys[idx];
-						stack->ch = node->keys[idx];
-						offset++;				// update key byte offset
-						continue;
-					}
+		  case Array256: {
+			ARTNode256* node = getObj(index, *slot);
+			idx = key[offset];
 
-					// key byte not found
+			if (slot->type) {
+			  slot = node->radix + idx;
+			  cursor->base->keyLen++;
+			  offset++;
+			  continue;
+			}
 
-					idx = slot4x14(stack->ch, 4, node->alloc, node->keys);
+			// key byte not found
 
-					if (idx < 4)
-						stack->ch = node->keys[idx];
-					else
-						stack->ch = 256;
+			break;
+		  }
 
-					break;
-				}
+		  case UnusedSlot: {
+			cursor->atRightEOF = true;
+			break;
+		  }
+		}  // end switch
 
-				case Array14: {
-					ARTNode14 *node = getObj(index, *slot);
+		break;
+	}  // end while (offset < keylen)
 
-					// simple loop comparing bytes
+	memcpy (cursor->key, key, cursor->base->keyLen);
 
-					for (idx = 0; idx < 14; idx++) {
-						if (node->alloc & (1 << idx))
-							if (key[offset] == node->keys[idx])
-								break;
-					}
+	if (slot->type == KeyEnd)
+		return true;
 
-					if (idx < 14) {
-						slot = node->radix + idx;  // slot points to child node
-						cursor->key[cursor->keySize++] = node->keys[idx];
-						stack->ch = node->keys[idx];
-						offset++;				// update key byte offset
-						continue;
-					}
+	if (slot->type == KeyPass)
+		return true;
 
-					// key byte not found
-
-					idx = slot4x14(stack->ch, 14, node->alloc, node->keys);
-
-					if (idx < 14)
-						stack->ch = node->keys[idx];
-					else
-						stack->ch = 256;
-
-					break;
-				}
-
-				case Array64: {
-					ARTNode64* node = getObj(index, *slot);
-					idx = node->keys[key[offset]];
-
-					if (idx < 0xff && (node->alloc & (1ULL << idx))) {
-						slot = node->radix + idx;  // slot points to child node
-						cursor->key[cursor->keySize++] = key[offset];
-						stack->ch = key[offset];
-						offset++;  // update key offset
-						continue;
-					}
-
-					// key byte not found
-
-					idx = slot64(stack->ch, node->alloc, node->keys);
-
-					if (idx < 256)
-						stack->ch = idx;
-					else
-						stack->ch = 256;
-
-					break;
-				}
-
-				case Array256: {
-					ARTNode256* node = getObj(index, *slot);
-					idx = key[offset];
-					slot = node->radix + idx;  // slot points to child node
-
-					if (slot->type) {
-						cursor->key[cursor->keySize++] = idx;
-						stack->ch = idx;
-						offset++;			// update key byte offset
-						continue;
-					}
-
-					// key byte not found
-					//	advance to next occupied radix entry
-
-					while (stack->ch < 256) {
-						idx = ++stack->ch;
-						if (idx < 256 && (++slot)->type)
-							break;
-					}
-
-					break;
-				}
-
-				case UnusedSlot: {
-					cursor->depth--;
-					if (!cursor->depth)
-						cursor->atRightEOF = true;
-
-					break;
-				}
-				default: {
-					// unreachable
-				}
-
-			}  // end switch
-
-			return slot;
-
-		}  // end while (offset < keylen)
-
-	} while (restart);
-
-	return slot;
+	return false;
 }

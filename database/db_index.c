@@ -94,7 +94,9 @@ int keyLen;
 	keyLen = keyGenerator(key, doc + 1, doc->size, spec + 1, spec->size);
 
 	keyLen = store64(key, keyLen, doc->docId.bits);
-	keyLen = store64(key, keyLen, doc->version);
+
+	if (idxhndl->map->arenaDef->useTxn)
+		keyLen = store64(key, keyLen, doc->version);
 
 	verPtr = arrayAdd(array, doc->verKeys->nslot++, *entry->key);
 	*verPtr = doc->version;
@@ -194,4 +196,3 @@ int idx;
 	releaseHandle(hndl);
 	return OK;
 }
-

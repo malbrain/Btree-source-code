@@ -7,37 +7,52 @@
 #include "btree1/btree1.h"
 #include "artree/artree.h"
 
-Status dbNextKey(DbCursor *cursor) {
-ArrayEntry *array;
-uint64_t *ver;
+//	position cursor
+
+Status dbPositionCursor(DbCursor *cursor, uint8_t *key, uint32_t keyLen) {
 Handle *index;
-Status stat;
-Txn *txn;
+bool found;
 
 	if (!(index = bindHandle(cursor->idx)))
 		return ERROR_arenadropped;
 
-	if (cursor->txnId.bits)
-		txn = fetchIdSlot(index->map->db, cursor->txnId);
-	else
-		txn = NULL;
-
-	while (true) {
-	  switch(*index->map->arena->type) {
-	  case ARTreeIndexType:
-		stat = artNextKey (cursor, index->map);
-		break;
-
-	  case Btree1IndexType:
-		stat = btree1NextKey (cursor, index->map);
+	switch (*index->map->arena->type) {
+	  case ARTreeIndexType: {
+		cursor->foundKey = artFindKey(cursor, index->map, key, keyLen);
 		break;
 	  }
 
-	  if (stat)
+	  case Btree1IndexType: {
+		cursor->foundKey = btree1FindKey(cursor, index->map, key, keyLen);
+		break;
+	  }
+	}
+
+	releaseHandle(index);
+	return OK;
+}
+
+Status dbNextDoc(DbCursor *cursor) {
+ArrayEntry *array;
+Txn *txn = NULL;
+uint64_t *ver;
+Handle *index;
+Status stat;
+
+	if (!(index = bindHandle(cursor->idx)))
+		return ERROR_arenadropped;
+
+	while (true) {
+	  if ((stat = dbNextKey(cursor, index)))
 		break;
 
-	  cursor->keyLen = get64(cursor->key, cursor->keyLen, &cursor->ver);
+	  if (index->map->arenaDef->useTxn)
+	  	cursor->keyLen = get64(cursor->key, cursor->keyLen, &cursor->ver);
+
 	  cursor->keyLen = get64(cursor->key, cursor->keyLen, &cursor->docId.bits);
+
+	  if (!txn && cursor->txnId.bits)
+		txn = fetchIdSlot(index->map->db, cursor->txnId);
 
 	  if (!(cursor->doc = findDocVer(index->map->parent, cursor->docId, txn)))
 		continue;
@@ -46,55 +61,105 @@ Txn *txn;
 
 	  if ((ver = arrayFind(array, cursor->doc->verKeys->nslot, index->map->arenaDef->id)))
 		if (*ver == cursor->ver)
-		  return OK;
+		  break;
 	}
 
 	releaseHandle(index);
-	return ERROR_endoffile;
+	return stat;
 }
 
-Status dbPrevKey(DbCursor *cursor) {
+Status dbPrevDoc(DbCursor *cursor) {
 ArrayEntry *array;
+Txn *txn = NULL;
 uint64_t *ver;
 Handle *index;
 Status stat;
-Txn *txn;
 
 	if (!(index = bindHandle(cursor->idx)))
 		return ERROR_arenadropped;
 
-	if (cursor->txnId.bits)
-		txn = fetchIdSlot(index->map->db, cursor->txnId);
-	else
-		txn = NULL;
-
 	while (true) {
-	  switch(*index->map->arena->type) {
-		stat = artPrevKey (cursor, index->map);
+	  if ((stat = dbPrevKey(cursor, index)))
 		break;
 
-	  case Btree1IndexType:
-		stat = btree1PrevKey (cursor, index->map);
-		break;
-	  }
+	  if (index->map->arenaDef->useTxn)
+	  	cursor->keyLen = get64(cursor->key, cursor->keyLen, &cursor->ver);
 
-	  if (stat)
-		break;
-
-	  cursor->keyLen = get64(cursor->key, cursor->keyLen, &cursor->ver);
 	  cursor->keyLen = get64(cursor->key, cursor->keyLen, &cursor->docId.bits);
 
-	  if (!(cursor->doc = findDocVer(index->map->parent, cursor->docId, txn)));
+	  if (!txn && cursor->txnId.bits)
+		txn = fetchIdSlot(index->map->db, cursor->txnId);
+
+	  if (!(cursor->doc = findDocVer(index->map->parent, cursor->docId, txn)))
 		continue;
 
 	  array = getObj(index->map->parent, *cursor->doc->verKeys);
 
 	  if ((ver = arrayFind(array, cursor->doc->verKeys->nslot, index->map->arenaDef->id)))
-		if (*ver == cursor->doc->version)
-		  return OK;
+		if (*ver == cursor->ver)
+		  break;
 	}
 
 	releaseHandle(index);
-	return ERROR_endoffile;
+	return stat;
 }
 
+Status dbNextKey(DbCursor *cursor, Handle *index) {
+bool release = false;
+Status stat;
+
+	if (!index)
+	  if ((index = bindHandle(cursor->idx)))
+		release = true;
+	  else
+		return ERROR_arenadropped;
+
+	switch(*index->map->arena->type) {
+	case ARTreeIndexType:
+		stat = artNextKey (cursor, index->map);
+		break;
+
+	case Btree1IndexType:
+		stat = btree1NextKey (cursor, index->map);
+		break;
+
+	default:
+		stat = ERROR_indextype;
+		break;
+	}
+
+	if (release)
+		releaseHandle(index);
+
+	return stat;
+}
+
+Status dbPrevKey(DbCursor *cursor, Handle *index) {
+bool release = false;
+Status stat;
+
+	if (!index)
+	  if ((index = bindHandle(cursor->idx)))
+		release = true;
+	  else
+		return ERROR_arenadropped;
+
+	switch(*index->map->arena->type) {
+	case ARTreeIndexType:
+		stat = artPrevKey (cursor, index->map);
+		break;
+
+	case Btree1IndexType:
+		stat = btree1PrevKey (cursor, index->map);
+		break;
+
+	default:
+		stat = ERROR_indextype;
+		break;
+	}
+
+	if (release)
+		releaseHandle(index);
+
+	return stat;
+}

@@ -33,6 +33,7 @@ typedef struct ArenaDef_ {
 	uint32_t baseSize;			// extra space after DbArena
 	uint32_t objSize;			// size of ObjectId array slot
 	uint8_t onDisk;				// arena onDisk/inMemory
+	uint8_t useTxn;				// transactions are used
 	DbAddr nameTree[1];			// child arena name red/black tree
 	SkipHead idList[1];			// child nameTree entry addr by id
 } ArenaDef;
@@ -51,6 +52,7 @@ struct DbArena_ {
 	uint32_t objSize;			// size of object array element
 	uint16_t currSeg;			// index of highest segment
 	uint16_t objSeg;			// current segment index for ObjIds
+	char UseTxn[1];				// Transactions are used for arena
 	char mutex[1];				// arena allocation lock/drop flag
 	char type[1];				// arena type
 };
@@ -73,7 +75,6 @@ struct DbMap_ {
 	uint16_t pathLen;		// length of path in buffer
 	uint16_t maxSeg;		// maximum mapped segment array index
 	char mapMutex[1];		// segment mapping mutex
-	char onDisk;			// on disk bool flag
 };
 
 //	database variables

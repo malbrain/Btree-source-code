@@ -93,7 +93,7 @@ Object *obj;
 
 	*hndl = NULL;
 
-	if (dochndl)
+	if (*dochndl)
 	  if (!(docHndl = *dochndl))
 		return ERROR_arenadropped;
 	  else
@@ -166,7 +166,7 @@ Object *obj;
 
 //	create new cursor
 
-Status createCursor(void **hndl, void **hndl1, ObjId txnId) {
+Status createCursor(void **hndl, void **hndl1, ObjId txnId, char type) {
 uint64_t timestamp;
 DbCursor *cursor;
 Handle *idxhndl;
@@ -183,11 +183,11 @@ Txn *txn;
 
 	switch (*idxhndl->map->arena->type) {
 	case ARTreeIndexType:
-		cursor = artNewCursor(idxhndl, timestamp, txnId);
+		cursor = artNewCursor(idxhndl, timestamp, txnId, type);
 		break;
 
 	case Btree1IndexType:
-		cursor = btree1NewCursor(idxhndl, timestamp, txnId);
+		cursor = btree1NewCursor(idxhndl, timestamp, txnId, type);
 		break;
 	}
 
@@ -220,6 +220,52 @@ Handle *idxhndl;
 	return OK;
 }
 
+//	iterate cursor to next key
+//	return zero on Eof
+
+Status nextKey(void **hndl, uint8_t **key, uint32_t *keyLen) {
+DbCursor *cursor;
+Status stat;
+
+	if ((cursor = *hndl))
+		stat = dbNextKey(cursor, NULL);
+	else
+		return ERROR_arenadropped;
+
+	if (stat)
+		return stat;
+
+	if (key)
+		*key = cursor->key;
+	if (keyLen)
+		*keyLen = cursor->keyLen;
+
+	return OK;
+}
+
+//	iterate cursor to prev key
+//	return zero on Bof
+
+uint32_t prevKey(void **hndl, uint8_t **key, uint32_t *keyLen) {
+DbCursor *cursor;
+Status stat;
+
+	if ((cursor = *hndl))
+		stat = dbPrevKey(cursor, NULL);
+	else
+		return ERROR_arenadropped;
+
+	if (stat)
+		return stat;
+
+	if (key)
+		*key = cursor->key;
+	if (keyLen)
+		*keyLen = cursor->keyLen;
+
+	return OK;
+}
+
 //	iterate cursor to next document
 
 Status nextDoc(void **hndl, Document **doc) {
@@ -227,7 +273,7 @@ DbCursor *cursor;
 Status stat;
 
 	if ((cursor = *hndl))
-		stat = dbNextKey(cursor);
+		stat = dbNextDoc(cursor);
 	else
 		return ERROR_handleclosed;
 
@@ -244,7 +290,7 @@ DbCursor *cursor;
 Status stat;
 
 	if ((cursor = *hndl))
-		stat = dbPrevKey(cursor);
+		stat = dbPrevDoc(cursor);
 	else
 		return ERROR_handleclosed;
 

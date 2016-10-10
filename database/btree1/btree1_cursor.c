@@ -13,7 +13,7 @@ uint64_t result;
 	return result;
 }
 
-DbCursor *btree1NewCursor(Handle *index, uint64_t timestamp, ObjId txnId) {
+DbCursor *btree1NewCursor(Handle *index, uint64_t timestamp, ObjId txnId, char type) {
 Btree1Cursor *cursor;
 Btree1Index *btree1;
 Btree1Page *first;
@@ -23,6 +23,8 @@ Btree1Page *first;
 	cursor = db_malloc(sizeof(Btree1Cursor), true);
 	cursor->pageAddr.bits = btree1NewPage(index, 0);
 	cursor->page = getObj(index->map, cursor->pageAddr);
+
+	//  TODO: reverse cursor
 
 	first = getObj(index->map, btree1->leaf);
 	btree1LockPage (first, Btree1_lockRead);

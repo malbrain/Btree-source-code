@@ -7,7 +7,7 @@
 
 //	TODO: lock record
 
-DbCursor *artNewCursor(Handle *index, uint64_t timestamp, ObjId txnId) {
+DbCursor *artNewCursor(Handle *index, uint64_t timestamp, ObjId txnId, char type) {
 CursorStack* stack;
 ArtCursor *cursor;
 DbAddr *base;
@@ -25,7 +25,11 @@ DbAddr *base;
     stack->slot->bits = base->bits;
     stack->addr = base;
     stack->off = 0;
-    stack->ch = -1;
+
+	if (type == 'f')
+    	stack->ch = -1;
+	else
+    	stack->ch = 256;
 
 	return cursor->base;
 }

@@ -74,6 +74,7 @@ DbMap *map;
 
 	arenaDef->initSize = params[InitSize].int64Val;
 	arenaDef->onDisk = params[OnDisk].boolVal;
+	arenaDef->useTxn = params[UseTxn].boolVal;
 	arenaDef->localSize = localSize;
 	arenaDef->baseSize = baseSize;
 	arenaDef->objSize = objSize;
@@ -124,7 +125,7 @@ int32_t amt = 0;
 	else
 		map->db = map;
 
-	if (!(map->onDisk = arenaDef->onDisk)) {
+	if (!arenaDef->onDisk) {
 #ifdef _WIN32
 		map->hndl = INVALID_HANDLE_VALUE;
 #else
@@ -206,9 +207,6 @@ int32_t amt = 0;
 	else
 		map->arenaDef = getObj(map->db, *map->arena->arenaDef);
 
-#ifdef DEBUG
-	fprintf(stderr, "unlockArena %s\n", map->path);
-#endif
 	unlockArena(map);
 
 	// wait for initialization to finish
@@ -405,8 +403,7 @@ DbAddr slot;
 			fprintf(stderr, "allocObj segment overrun\n"), exit(1);
 	}
 
-	slot.alive = 1;
-	slot.type = type;
+	*slot.latch = type | ALIVE_BIT;
 	return slot.bits;
 }
 

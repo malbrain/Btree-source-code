@@ -106,13 +106,12 @@ typedef struct {
 } Btree1Cursor;
 
 #define btree1index(map) ((Btree1Index *)(map->arena + 1))
-#define btree1cursor(map) ((Btree1Cursor *)(map->arena + 1))
 
-DbCursor *btree1NewCursor(Handle *idx, uint64_t timestamp, ObjId txnId);
+DbCursor *btree1NewCursor(Handle *idx, uint64_t timestamp, ObjId txnId, char type);
 uint8_t *btree1CursorKey(DbCursor *dbCursor, uint32_t *len);
 
 uint64_t btree1NewPage (Handle *hndl, uint8_t lvl);
-DbAddr *btree1FindKey(DbMap  *map, DbCursor *dbCursor, uint8_t *key, uint32_t keylen);
+bool btree1FindKey(DbCursor *dbCursor, DbMap *index, uint8_t *key, uint32_t keylen);
 bool btree1SeekKey (DbCursor *dbCursor, uint8_t *key, uint32_t keylen);
 Status btree1NextKey (DbCursor *cursor, DbMap *index);
 Status btree1PrevKey (DbCursor *cursor, DbMap *index);

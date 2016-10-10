@@ -20,6 +20,7 @@ typedef struct {
     Document *doc;          // current document
 	uint32_t keyLen;
 	uint8_t *key;
+	bool foundKey;			// cursor position found the key
 } DbCursor;
 
 typedef struct {
@@ -31,7 +32,12 @@ typedef struct {
 } DocHndl;
 
 #define dbindex(map) ((DbIndex *)(map->arena + 1))
-#define dbcursor(map) ((DbCursor *)(map->arena + 1))
 
 Status storeDoc(DocHndl *docHndl, Handle *hndl, void *obj, uint32_t objSize, ObjId *result, ObjId txnId);
 Status installIndexes(DocHndl *docHndl);
+
+Status dbPositionCursor(DbCursor *cursor, uint8_t *key, uint32_t keyLen);
+Status dbNextKey(DbCursor *cursor, Handle *index);
+Status dbPrevKey(DbCursor *cursor, Handle *index);
+Status dbNextDoc(DbCursor *cursor);
+Status dbPrevDoc(DbCursor *cursor);

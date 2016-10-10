@@ -12,7 +12,7 @@ void initialize();
 Status openDatabase(void **hndl, char *name, uint32_t nameLen, Params *params);
 Status openDocStore(void **hndl, void **database, char *name, uint32_t nameLen, Params *params);
 Status createIndex(void **hndl, void **docHndl, ArenaType type, char *idxName, uint32_t nameLen, void *keySpec, uint16_t specSize, Params *params);
-Status createCursor(void **hndl, void **index, ObjId txnId);
+Status createCursor(void **hndl, void **index, ObjId txnId, char type);
 Status cloneHandle(void **hndl, void **fromhndl);
 
 uint64_t beginTxn(void **hndl);
@@ -24,3 +24,6 @@ Status insertKey(void **index, uint8_t *key, uint32_t len);
 Status nextDoc(void **hndl, Document **doc);
 Status prevDoc(void **hndl, Document **doc);
 Status addIndexKeys(void **dochndl);
+
+Status nextKey(void **hndl, uint8_t **key, uint32_t *keyLen);
+Status prevKey(void **hndl, uint8_t **key, uint32_t *keyLen);

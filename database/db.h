@@ -41,6 +41,7 @@ typedef union {
 #define ALIVE_BIT  0x40
 
 #define ADDR_MUTEX_SET 0x80000000000000ULL
+#define ADDR_ALIVE_SET 0x40000000000000ULL
 
 typedef union {
 	struct {
@@ -59,13 +60,14 @@ typedef struct DbMap_ DbMap;
 //	param slots
 
 typedef enum {
-	OnDisk = 0,			// base set
-	InitSize,
+	OnDisk = 0,		// base set
+	InitSize,		// arena size
+	UseTxn,			// txn used
 
-	Btree1Bits = 2,		// Btree1 set
+	Btree1Bits = 3,	// Btree1 set
 	Btree1Xtra,
 
-	MaxParam = 4		// param array size
+	MaxParam = 5	// param array size
 } ParamSlot;
 
 typedef union {
