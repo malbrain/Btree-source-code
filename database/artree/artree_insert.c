@@ -6,8 +6,8 @@
 #include "artree.h"
 
 typedef struct {
-	DbAddr *slot;
-	DbAddr *prev;
+	volatile DbAddr *slot;
+	volatile DbAddr *prev;
 	DbAddr oldSlot[1];
 	DbAddr newSlot[1];
 
@@ -28,11 +28,11 @@ typedef enum {
 	ErrorSearch
 } ReturnState;
 
-ReturnState insertKeySpan(ARTSpan*, ParamStruct *);
-ReturnState insertKeyNode4(ARTNode4*, ParamStruct *);
-ReturnState insertKeyNode14(ARTNode14*, ParamStruct *);
-ReturnState insertKeyNode64(ARTNode64*, ParamStruct *);
-ReturnState insertKeyNode256(ARTNode256*, ParamStruct *);
+ReturnState insertKeySpan(volatile ARTSpan*, ParamStruct *);
+ReturnState insertKeyNode4(volatile ARTNode4*, ParamStruct *);
+ReturnState insertKeyNode14(volatile ARTNode14*, ParamStruct *);
+ReturnState insertKeyNode64(volatile ARTNode64*, ParamStruct *);
+ReturnState insertKeyNode256(volatile ARTNode256*, ParamStruct *);
 ReturnState prevEndKeySlot(ParamStruct *p);
 
 uint64_t artAllocateNode(Handle *index, int type, uint32_t size) {
@@ -59,37 +59,36 @@ int segments;
 //	with remaining key bytes
 //	return false if out of memory
 
-bool fillKey(ParamStruct *p, DbAddr *slot) {
+bool fillKey(ParamStruct *p, volatile DbAddr *slot) {
+DbAddr addr, fill[1], *next = fill;
 ARTSpan *spanNode;
 uint32_t len;
-DbAddr addr;
 
-	slot->bits = 0;
+	fill->bits = 0;
 
 	while ( (len = (p->keylen - p->off)) ) {
 		if (len > 256)
 			len = 256;
 
-		if ((addr.bits = allocSpanNode(p, len)))
-			spanNode = getObj(p->index->map, addr);
+		if ((next->bits = allocSpanNode(p, len)))
+			spanNode = getObj(p->index->map, *next);
 		else
 			return false;
 
-		addr.nbyte = len - 1;
+		next->nbyte = len - 1;
 		spanNode->timestamp = allocateTimestamp(p->index->map->db, en_writer);
 		memcpy(spanNode->bytes, p->key + p->off, len);
-		slot->bits = addr.bits;
 
-		slot = spanNode->next;
+		next = spanNode->next;
 		p->off += len;
 	}
 
 	// mark the end of the key
 
-	slot->type = KeyEnd;
-	slot->alive = 1;
+	next->type = KeyEnd;
+	next->alive = 1;
 
-	p->slot = slot;
+	slot->bits = fill->bits;
 	return true;
 }
 
@@ -120,6 +119,7 @@ DbAddr slot;
 
 		while (p->off < p->keylen) {
 			ReturnState rt = ContinueSearch;
+
 			p->oldSlot->bits = p->slot->bits | ADDR_MUTEX_SET;
 			p->ch = p->key[p->off];
 			p->newSlot->bits = 0;
@@ -200,7 +200,7 @@ DbAddr slot;
 
 				if (!p->newSlot->bits) {
 					unlockLatch(p->prev->latch);
-					break;
+					return OK;
 				}
 
 				// install new node value
@@ -214,9 +214,11 @@ DbAddr slot;
 				  if (!addSlotToFrame(index->map, index->list[slot.type].tail, slot))
 					return ERROR_outofmemory;
 
+				return OK;
+
 			}  // end switch
 
-			break;
+			break;	// only restart comes here
 
 		}	// end while (p->off < p->keylen)
 
@@ -272,7 +274,7 @@ ARTSplice *splice;
     return fillKey(p, splice->next) ? EndSearch : ErrorSearch;
 }
 
-ReturnState insertKeyNode4(ARTNode4 *node, ParamStruct *p) {
+ReturnState insertKeyNode4(volatile ARTNode4 *node, ParamStruct *p) {
 ARTNode14 *radix14Node;
 uint32_t idx, out;
 uint8_t bits;
@@ -344,7 +346,7 @@ uint8_t bits;
 	radix14Node->timestamp = node->timestamp;
 
 	for (idx = 0; idx < 4; idx++) {
-		DbAddr *slot = node->radix + idx;
+		volatile DbAddr *slot = node->radix + idx;
 		lockLatch(slot->latch);
 
 		if (slot->alive) {
@@ -356,9 +358,11 @@ uint8_t bits;
 			radix14Node->alloc |= 1 << out;
 			radix14Node->radix[out].bits = slot->bits & ~ADDR_MUTEX_SET;
 			radix14Node->keys[out] = node->keys[idx];
-			slot->alive = 0;
 		}
-		unlockLatch(slot->latch);
+
+		// clear mutex & alive bits
+
+		*slot->latch = slot->type;
 	}
 
 #ifdef _WIN32
@@ -379,7 +383,7 @@ uint8_t bits;
 	return EndSearch;
 }
 
-ReturnState insertKeyNode14(ARTNode14 *node, ParamStruct *p) {
+ReturnState insertKeyNode14(volatile ARTNode14 *node, ParamStruct *p) {
 ARTNode64 *radix64Node;
 uint32_t idx, out;
 uint16_t bits;
@@ -440,36 +444,36 @@ uint16_t bits;
 	}
 
 	// the radix node is full, promote to the next larger size.
-	// initialize all the keys as currently unassigned.
 
 	if ( (p->newSlot->bits = artAllocateNode(p->index, Array64, sizeof(ARTNode64))) )
 		radix64Node = getObj(p->index->map,*p->newSlot);
 	else
 		return ErrorSearch;
 
+	// initialize all the keys as currently unassigned.
+
 	memset((void*)radix64Node->keys, 0xff, sizeof(radix64Node->keys));
 	radix64Node->timestamp = node->timestamp;
 
 	for (idx = 0; idx < 14; idx++) {
-		DbAddr *slot = node->radix + idx;
+		volatile DbAddr *slot = node->radix + idx;
 		lockLatch(slot->latch);
-		if (slot->alive) {
 
+		if (slot->alive) {
 #ifdef _WIN32
 			_BitScanForward64((DWORD *)&out, ~radix64Node->alloc);
 #else
 			out = __builtin_ctzl(~radix64Node->alloc);
 #endif
-
 			radix64Node->alloc |= 1ULL << out;
-			radix64Node->radix[idx].bits = slot->bits & ~ADDR_MUTEX_SET;
+			radix64Node->radix[out].bits = slot->bits & ~ADDR_MUTEX_SET;
 			radix64Node->keys[node->keys[idx]] = out;
-			slot->alive = 0;
 		}
 
-		unlockLatch(slot->latch);
-	}
+		// clear mutex & alive bits
 
+		*slot->latch = slot->type;
+	}
 #ifdef _WIN32
 	_BitScanForward64((DWORD *)&out, ~radix64Node->alloc);
 #else
@@ -488,9 +492,11 @@ uint16_t bits;
 	return EndSearch;
 }
 
-ReturnState insertKeyNode64(ARTNode64 *node, ParamStruct *p) {
-uint32_t idx = node->keys[p->ch], out;
+ReturnState insertKeyNode64(volatile ARTNode64 *node, ParamStruct *p) {
 ARTNode256 *radix256Node;
+uint32_t idx, out;
+
+	idx = node->keys[p->ch];
 
 	if (idx < 0xff ) {
 		p->slot = node->radix + idx;
@@ -534,13 +540,13 @@ ARTNode256 *radix256Node;
 #else
 		out = __builtin_ctzl(~node->alloc);
 #endif
-		node->keys[p->ch] = out;
 		p->off++;
 
 		if (!fillKey(p, node->radix + out))
 			return ErrorSearch;
 
 		node->alloc |= 1ULL << out;
+		node->keys[p->ch] = out;
 		return EndSearch;
 	}
 
@@ -555,66 +561,61 @@ ARTNode256 *radix256Node;
 
 	for (idx = 0; idx < 256; idx++)
 	  if (node->keys[idx] < 0xff) {
-		DbAddr *slot = node->radix + node->keys[idx];
+		volatile DbAddr *slot = node->radix + node->keys[idx];
 		lockLatch(slot->latch);
 		if (slot->alive) {
 			radix256Node->radix[idx].bits = slot->bits & ~ADDR_MUTEX_SET;
 			p->newSlot->nslot++;
-			slot->alive = 0;
 		}
-		unlockLatch(slot->latch);
+
+		// clear mutex & alive bits
+
+		*slot->latch = slot->type;
 	  }
 
 	// fill in the rest of the key bytes into Span nodes
 
 	p->newSlot->nslot++;
+	p->off++;
 
-    return fillKey(p, radix256Node->radix + p->key[p->off++]) ? EndSearch : ErrorSearch;
+    return fillKey(p, radix256Node->radix + p->ch) ? EndSearch : ErrorSearch;
 }
 
-ReturnState insertKeyNode256(ARTNode256 *node, ParamStruct *p) {
-DbAddr *slot = node->radix + p->ch;
+ReturnState insertKeyNode256(volatile ARTNode256 *node, ParamStruct *p) {
 
-	//  is slot occupied?
+	//  is radix slot occupied?
 
-	if (slot->type) {
-		p->slot = slot;
+	p->slot = node->radix + p->ch;
+
+	if (node->radix[p->ch].type) {
 		p->off++;
-		return ContinueSearch;
+    	return ContinueSearch;
 	}
 
-	// obtain write lock on the radix node
+	// lock and retry
 
-	lockLatch(p->slot->latch);
+	lockLatch(p->prev->latch);
 
-	// restart if slot has been killed
-	// or node has changed.
-
-	if (!p->slot->alive) {
-		unlockLatch(p->slot->latch);
-		return RestartSearch;
-	}
-
-	if (p->slot->bits != p->oldSlot->bits) {
-		unlockLatch(p->slot->latch);
-		return RetrySearch;
-	}
-
-	//  retry under lock
-
-	if (slot->type) {
-		unlockLatch(p->slot->latch);
-		p->slot = slot;
+	if (node->radix[p->ch].type) {
+		unlockLatch(p->prev->latch);
 		p->off++;
-		return ContinueSearch;
+    	return ContinueSearch;
 	}
+
+	// fill-in empty radix slot
 
 	p->off++;
-	p->slot->nslot++;
-    return fillKey(p, slot) ? EndSearch : ErrorSearch;
+
+	if (!fillKey(p, p->slot))
+		return ErrorSearch;
+
+	//	increment count of used radix slots
+
+	p->prev->nslot++;
+    return EndSearch;
 }
 
-ReturnState insertKeySpan(ARTSpan *node, ParamStruct *p) {
+ReturnState insertKeySpan(volatile ARTSpan *node, ParamStruct *p) {
 uint32_t len = p->oldSlot->nbyte + 1;
 uint32_t max = len, idx;
 DbAddr *contSlot = NULL;
@@ -673,7 +674,7 @@ ARTNode4 *radix4Node;
 		else
 			return ErrorSearch;
 
-		memcpy(spanNode2->bytes, node->bytes, idx);
+		memcpy(spanNode2->bytes, (void *)node->bytes, idx);
 		spanNode2->timestamp = node->timestamp;
 		p->newSlot->nbyte = idx - 1;
 		nxtSlot = spanNode2->next;
@@ -685,10 +686,8 @@ ARTNode4 *radix4Node;
 	}
 
 	// if we have more key bytes, insert a radix node after span1 and before
-	// possible
-	// span2 for the next key byte and the next remaining original span byte (if
-	// any).
-	// note:  max > idx
+	// possible span2 for the next key byte and the next remaining original
+	// span byte (if any).  note:  max > idx
 
 	if (p->off < p->keylen) {
 		if ( (nxtSlot->bits = artAllocateNode(p->index, Array4, sizeof(ARTNode4))) )
@@ -723,10 +722,9 @@ ARTNode4 *radix4Node;
 			return ErrorSearch;
 
 		overflowSpanNode = getObj(p->index->map, *nxtSlot);
-		memcpy(overflowSpanNode->bytes, node->bytes + idx, max - idx);
+		memcpy(overflowSpanNode->bytes, (char *)node->bytes + idx, max - idx);
 		overflowSpanNode->next->bits = node->next->bits & ~ADDR_MUTEX_SET;
 		overflowSpanNode->timestamp = node->timestamp;
-
 	} else {
 		// append second span node after span or radix node from above
 		// otherwise hook remainder of the trie into the
@@ -735,8 +733,8 @@ ARTNode4 *radix4Node;
 		nxtSlot->bits = node->next->bits & ~ADDR_MUTEX_SET;
 	}
 
-	node->next->alive = 0;
-	unlockLatch(node->next->latch);
+	*node->next->latch = node->next->type;	// turn off alive & mutex
+	assert(p->newSlot->bits > 0);
 
 	// fill in the rest of the key into the radix or overflow span node
 

@@ -56,6 +56,7 @@ int32_t atomicAdd32(volatile int32_t *value, int32_t amt);
 int64_t atomicOr64(volatile int64_t *value, int64_t amt);
 int32_t atomicOr32(volatile int32_t *value, int32_t amt);
 uint64_t compareAndSwap(uint64_t* target, uint64_t compare_val, uint64_t swap_val);
+int8_t atomicAdd8(volatile int8_t *value, int8_t amt);
 
 void lockArena (DbMap *map);
 void unlockArena (DbMap *map);

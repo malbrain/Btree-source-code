@@ -27,3 +27,5 @@ Status addIndexKeys(void **dochndl);
 
 Status nextKey(void **hndl, uint8_t **key, uint32_t *keyLen);
 Status prevKey(void **hndl, uint8_t **key, uint32_t *keyLen);
+
+bool positionCursor(void **hndl, uint8_t *key, uint32_t keyLen);

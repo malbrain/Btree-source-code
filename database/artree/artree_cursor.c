@@ -19,7 +19,6 @@ DbAddr *base;
 	cursor->base->txnId.bits = txnId.bits;
 	cursor->base->key = cursor->key;
 	cursor->base->ts = timestamp;
-	*cursor->base->idx = index;
 
     stack = &cursor->stack[cursor->depth++];
     stack->slot->bits = base->bits;

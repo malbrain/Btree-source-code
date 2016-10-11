@@ -30,8 +30,8 @@ typedef struct {
 
 typedef struct {
 	uint64_t timestamp;
-	volatile uint8_t alloc;
-	volatile uint8_t keys[4];
+	uint8_t alloc;
+	uint8_t keys[4];
 	uint8_t filler[3];
 	DbAddr radix[4];
 } ARTNode4;
@@ -42,8 +42,8 @@ typedef struct {
 
 typedef struct {
 	uint64_t timestamp;
-	volatile uint16_t alloc;
-	volatile uint8_t keys[14];
+	uint16_t alloc;
+	uint8_t keys[14];
 	DbAddr radix[14];
 } ARTNode14;
 
@@ -53,8 +53,8 @@ typedef struct {
 
 typedef struct {
 	uint64_t timestamp;
-	volatile uint64_t alloc;
-	volatile uint8_t keys[256];
+	uint64_t alloc;
+	uint8_t keys[256];
 	DbAddr radix[64];
 } ARTNode64;
 
@@ -79,7 +79,7 @@ typedef struct {
 } ARTSpan;
 
 /**
- * Span node base length calc
+ * Index arena definition
  */
 
 typedef struct {
@@ -89,10 +89,10 @@ typedef struct {
 } ArtIndex;
 
 typedef struct {
-	DbAddr slot[1];	// slot that points to node
-	DbAddr *addr;	// tree addr of slot
-	uint16_t off;	// offset within key
-	int16_t ch;		// character of key
+	volatile DbAddr *addr;	// tree addr of slot
+	DbAddr slot[1];			// slot that points to node
+	uint16_t off;			// offset within key
+	int16_t ch;				// character of key
 	bool dir;
 } CursorStack;
 

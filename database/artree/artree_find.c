@@ -8,8 +8,8 @@
 bool artFindKey( DbCursor *dbCursor, DbMap *index, uint8_t *key, uint32_t keyLen) {
 ArtCursor *cursor = (ArtCursor *)dbCursor;
 uint32_t idx, offset = 0, spanMax;
+volatile DbAddr *slot;
 CursorStack* stack;
-DbAddr *slot;
 
 	if (cursor) {
 		cursor->atLeftEOF = false;
@@ -79,6 +79,7 @@ DbAddr *slot;
 
 			//  continue to the next slot
 
+			cursor->base->keyLen += spanMax;
 			slot = spanNode->next;
 			offset += spanMax;
 			continue;
@@ -148,7 +149,7 @@ DbAddr *slot;
 			ARTNode256* node = getObj(index, *slot);
 			idx = key[offset];
 
-			if (slot->type) {
+			if (node->radix[idx].type) {
 			  slot = node->radix + idx;
 			  cursor->base->keyLen++;
 			  offset++;

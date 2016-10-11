@@ -130,8 +130,8 @@ void *index_file (void *arg)
 unsigned __stdcall index_file (void *arg)
 #endif
 {
-uint64_t line = 0, found = 0, cnt = 0;
 int ch, len = 0, slot, type = 0;
+uint64_t line = 0, cnt = 0;
 Params params[MaxParam];
 unsigned char key[4096];
 ThreadArg *args = arg;
@@ -141,6 +141,8 @@ void *docStore[1];
 void *cursor[1];
 void *index[1];
 char *idxName;
+bool found;
+
 uint32_t keyLen;
 uint8_t *keyPtr;
 Document *doc;
@@ -239,6 +241,7 @@ FILE *in;
 			else if( len < 4096 )
 				key[len++] = ch;
 
+		fprintf(stderr, " Total keys indexed %lld\n", line);
 		break;
 
 	case 'f':
@@ -260,38 +263,34 @@ FILE *in;
 		  while( ch = getc(in), ch != EOF )
 			if( ch == '\n' )
 			{
+#ifdef DEBUG
+			  if (!(line % 100000))
+				fprintf(stderr, "line %lld\n", line);
+#endif
 			  line++;
 
-			  if ((stat = dbPositionCursor (cursor, index, key, len)))
-				  fprintf(stderr, "findKey Error %d Syserr %d Line: %lld\n", stat, errno, line), exit(0);
+			  if (keySpec->keyLen)
+				len = keySpec->keyLen;
+
+			  found = positionCursor (cursor, key, len);
 
 			  if (args->noDocs) {
-				stat = nextKey (cursor, &keyPtr, &keyLen);
-
-				if (stat == ERROR_endoffile)
-				  break;
-				else
-				  fprintf(stderr, "findKey nextKey: Error %d Syserr %d Line: %lld\n", stat, errno, line), exit(0);
-
-				if (keySpec->keyLen)
-				  len = keySpec->keyLen;
-
-			  	if (keyLen != len || memcmp(keyPtr, keyPtr, len))
-				  fprintf(stderr, "findKey Error: expected: %.*s found: %.*s.\n", len, key, keyLen, keyPtr ), exit(0);
+				if (!found)
+				  fprintf(stderr, "findKey not Found: line: %lld expected: %.*s \n", line, len, key), exit(0);
 			  } else {
 				if ((stat = nextDoc (cursor, &doc)))
 				  fprintf(stderr, "findDocument Error %d Syserr %d Line: %lld\n", stat, errno, line), exit(0);
-				if (doc->size != len || memcmp(doc + 1, key, len))
-				  fprintf(stderr, "findDoc Error: expected: %.*s found: %.*s.\n", len, key, doc->size, (char *)(doc + 1)), exit(0);
+				if (memcmp(doc + 1, key, len))
+				  fprintf(stderr, "findDoc Error: line: %lld expected: %.*s found: %.*s.\n", line, len, key, doc->size, (char *)(doc + 1)), exit(0);
 			  }
 
-			  found++;
+			  cnt++;
 			  len = 0;
 			}
 			else if( len < 4096 )
 				key[len++] = ch;
 
-		fprintf(stderr, "finished %s for %lld keys, found %lld\n", args->inFile, line, found);
+		fprintf(stderr, "finished %s for %lld keys, found %lld\n", args->inFile, line, cnt);
 		break;
 
 	case 's':
@@ -323,7 +322,7 @@ FILE *in;
 		if (stat != ERROR_endoffile)
 		  fprintf(stderr, "fwdScan: Error %d Syserr %d Line: %lld\n", stat, errno, cnt), exit(0);
 
-		fprintf(stderr, " Total keys read %lldd\n", cnt);
+		fprintf(stderr, " Total keys read %lld\n", cnt);
 		break;
 
 	case 'r':
@@ -355,7 +354,7 @@ FILE *in;
 		if (stat != ERROR_endoffile)
 		  fprintf(stderr, "revScan: Error %d Syserr %d Line: %lld\n", stat, errno, cnt), exit(0);
 
-		fprintf(stderr, " Total keys read %lldd\n", cnt);
+		fprintf(stderr, " Total keys read %lld\n", cnt);
 		break;
 
 	case 'c':

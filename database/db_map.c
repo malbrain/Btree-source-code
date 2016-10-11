@@ -134,6 +134,14 @@ void unlockLatch(volatile char* latch) {
 	*latch = *latch & ~MUTEX_BIT;
 }
 
+int8_t atomicAdd8(volatile int8_t *value, int8_t amt) {
+#ifndef _WIN32
+	return __sync_add_and_fetch(value, amt);
+#else
+	return _InterlockedExchangeAdd8( value, amt);
+#endif
+}
+
 int64_t atomicAdd64(volatile int64_t *value, int64_t amt) {
 #ifndef _WIN32
 	return __sync_add_and_fetch(value, amt);

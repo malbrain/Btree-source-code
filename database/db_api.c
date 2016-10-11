@@ -192,6 +192,7 @@ Txn *txn;
 	}
 
 	releaseHandle(idxhndl);
+	*cursor->idx = *hndl1;
 	*hndl = cursor;
 	return OK;
 }
@@ -218,6 +219,21 @@ Handle *idxhndl;
 
 	*hndl = NULL;
 	return OK;
+}
+
+//	position cursor on a key
+
+bool positionCursor(void **hndl, uint8_t *key, uint32_t keyLen) {
+DbCursor *cursor;
+Status stat;
+
+	if (!(cursor = *hndl))
+		return ERROR_handleclosed;
+
+	if ((stat = dbPositionCursor(cursor, key, keyLen)))
+		return false;
+
+	return cursor->foundKey;
 }
 
 //	iterate cursor to next key
