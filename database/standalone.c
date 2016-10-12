@@ -103,8 +103,8 @@ typedef struct {
 	char idx;
 	char *cmds;
 	char *inFile;
-	char *endKey;
-	char *startKey;
+	char *maxKey;
+	char *minKey;
 	void **database;
 	int useTxn, noDocs;
 	int bits, xtra, onDisk;
@@ -145,7 +145,7 @@ void *index[1];
 char *idxName;
 bool found;
 
-uint32_t endLen = 0;
+uint32_t maxLen = 0;
 uint32_t keyLen = 0;
 uint8_t *keyPtr;
 Document *doc;
@@ -154,8 +154,8 @@ ObjId objId;
 ObjId txnId;
 FILE *in;
 
-	if (args->endKey)
-		endLen = strlen(args->endKey);
+	if (args->maxKey)
+		maxLen = strlen(args->maxKey);
 	
 	idxType = indexType[args->idxType];
 	idxName = indexNames[args->idxType];
@@ -284,7 +284,7 @@ FILE *in;
 				if (!found)
 				  fprintf(stderr, "findKey not Found: line: %lld expected: %.*s \n", line, len, key), exit(0);
 			  } else {
-				if ((stat = nextDoc (cursor, &doc, args->endKey, endLen)))
+				if ((stat = nextDoc (cursor, &doc, args->maxKey, maxLen)))
 				  fprintf(stderr, "findDocument Error %d Syserr %d Line: %lld\n", stat, errno, line), exit(0);
 				if (memcmp(doc + 1, key, len))
 				  fprintf(stderr, "findDoc Error: line: %lld expected: %.*s found: %.*s.\n", line, len, key, doc->size, (char *)(doc + 1)), exit(0);
@@ -302,11 +302,11 @@ FILE *in;
 	case 's':
 		fprintf(stderr, "started scanning");
 
-		if (args->startKey)
-			fprintf(stderr, " min key: %s", args->startKey);
+		if (args->minKey)
+			fprintf(stderr, " min key: %s", args->minKey);
 
-		if (args->endKey)
-			fprintf(stderr, " max key: %s", args->endKey);
+		if (args->maxKey)
+			fprintf(stderr, " max key: %s", args->maxKey);
 
 		fprintf(stderr, "\n");
 
@@ -320,17 +320,17 @@ FILE *in;
 
 		createCursor (cursor, index, txnId, 'f');
 
-		if (args->startKey)
-			positionCursor (cursor, args->startKey, strlen(args->startKey));
+		if (args->minKey)
+			positionCursor (cursor, args->minKey, strlen(args->minKey));
 
 		if (args->noDocs)
-		  while (!(stat = nextKey (cursor, &keyPtr, &keyLen, args->endKey, endLen))) {
+		  while (!(stat = nextKey (cursor, &keyPtr, &keyLen, args->maxKey, maxLen))) {
 			fwrite (keyPtr, keyLen, 1, stdout);
 			fputc ('\n', stdout);
 			cnt++;
 		  }
 		else
-		  while (!(stat = nextDoc(cursor, &doc, args->endKey, endLen))) {
+		  while (!(stat = nextDoc(cursor, &doc, args->maxKey, maxLen))) {
             fwrite (doc + 1, doc->size, 1, stdout);
             fputc ('\n', stdout);
             cnt++;
@@ -345,11 +345,11 @@ FILE *in;
 	case 'r':
 		fprintf(stderr, "started reverse scanning");
 
-		if (args->startKey)
-			fprintf(stderr, " min key: %s", args->startKey);
+		if (args->minKey)
+			fprintf(stderr, " min key: %s", args->minKey);
 
-		if (args->endKey)
-			fprintf(stderr, " max key: %s", args->endKey);
+		if (args->maxKey)
+			fprintf(stderr, " max key: %s", args->maxKey);
 
 		fprintf(stderr, "\n");
 
@@ -363,17 +363,17 @@ FILE *in;
 
 		createCursor (cursor, index, txnId, 'r');
 
-		if (args->startKey)
-			positionCursor (cursor, args->startKey, strlen(args->startKey));
+		if (args->minKey)
+			positionCursor (cursor, args->minKey, strlen(args->minKey));
 
 		if (args->noDocs)
-		  while (!(stat = prevKey (cursor, &keyPtr, &keyLen, args->endKey, endLen))) {
+		  while (!(stat = prevKey (cursor, &keyPtr, &keyLen, args->maxKey, maxLen))) {
 			fwrite (keyPtr, keyLen, 1, stdout);
 			fputc ('\n', stdout);
 			cnt++;
 		  }
 		else
-		  while (!(stat = prevDoc(cursor, &doc, args->endKey, endLen))) {
+		  while (!(stat = prevDoc(cursor, &doc, args->maxKey, maxLen))) {
             fwrite (doc + 1, doc->size, 1, stdout);
             fputc ('\n', stdout);
             cnt++;
@@ -388,11 +388,11 @@ FILE *in;
 	case 'c':
 		fprintf(stderr, "started counting");
 
-		if (args->startKey)
-			fprintf(stderr, " min key: %s", args->startKey);
+		if (args->minKey)
+			fprintf(stderr, " min key: %s", args->minKey);
 
-		if (args->endKey)
-			fprintf(stderr, " max key: %s", args->endKey);
+		if (args->maxKey)
+			fprintf(stderr, " max key: %s", args->maxKey);
 
 		fprintf(stderr, "\n");
 
@@ -407,10 +407,10 @@ FILE *in;
 		createCursor (cursor, index, txnId, 'f');
 
 		if (args->noDocs)
-	  	  while (!(stat = nextKey(cursor, NULL, NULL, args->endKey, endLen)))
+	  	  while (!(stat = nextKey(cursor, NULL, NULL, args->maxKey, maxLen)))
 			cnt++;
 		else
-	  	  while (!(stat = nextDoc(cursor, &doc, args->endKey, endLen)))
+	  	  while (!(stat = nextDoc(cursor, &doc, args->maxKey, maxLen)))
 			cnt++;
 
 		fprintf(stderr, " Total keys counted %lld\n", cnt);
@@ -431,8 +431,8 @@ int main (int argc, char **argv)
 int idx, cnt, len, slot, err;
 int useTxn = 0, noDocs = 0;
 int xtra = 0, bits = 16;
-char *startKey = NULL;
-char *endKey = NULL;
+char *minKey = NULL;
+char *maxKey = NULL;
 int keyLen = 10;
 int idxType = 0;
 char *dbName;
@@ -460,7 +460,7 @@ void *index[1];
 	fprintf(stderr, "PageSize: %d, # Processors: %d, Allocation Granularity: %d\n\n", info->dwPageSize, info->dwNumberOfProcessors, info->dwAllocationGranularity);
 #endif
 	if( argc < 3 ) {
-		fprintf (stderr, "Usage: %s db_name -cmds=[crwsdf]... -type=[012] -bits=# -xtra=# -onDisk -txns -noDocs -keyLen=# -startKey=abcd -endKey=abce src_file1 src_file2 ... ]\n", argv[0]);
+		fprintf (stderr, "Usage: %s db_name -cmds=[crwsdf]... -type=[012] -bits=# -xtra=# -onDisk -txns -noDocs -keyLen=# -minKey=abcd -maxKey=abce src_file1 src_file2 ... ]\n", argv[0]);
 		fprintf (stderr, "  where db_name is the prefix name of the database file\n");
 		fprintf (stderr, "  cmds is a string of (c)ount/(r)ev scan/(w)rite/(s)can/(d)elete/(f)ind, with a one character command for each input src_file, or a no-input command.\n");
 		fprintf (stderr, "  type is the type of index: 0 = ART, 1 = btree1, 2 = btree2\n");
@@ -470,8 +470,8 @@ void *index[1];
 		fprintf (stderr, "  onDisk specifies resides in disk file\n");
 		fprintf (stderr, "  noDocs specifies keys only\n");
 		fprintf (stderr, "  txns indicates use of transactions\n");
-		fprintf (stderr, "  startKey specifies beginning cursor key\n");
-		fprintf (stderr, "  endKey specifies ending cursor key\n");
+		fprintf (stderr, "  minKey specifies beginning cursor key\n");
+		fprintf (stderr, "  maxKey specifies ending cursor key\n");
 		fprintf (stderr, "  src_file1 thru src_filen are files of keys/documents separated by newline\n");
 		exit(0);
 	}
@@ -500,10 +500,10 @@ void *index[1];
 			useTxn = 1;
 	  else if (!memcmp(argv[0], "-noDocs", 7))
 			noDocs = 1;
-	  else if (!memcmp(argv[0], "-startKey=", 10))
-			startKey = argv[0] + 10;
-	  else if (!memcmp(argv[0], "-endKey=", 8))
-			endKey = argv[0] + 8;
+	  else if (!memcmp(argv[0], "-minKey=", 8))
+			minKey = argv[0] + 8;
+	  else if (!memcmp(argv[0], "-maxKey=", 8))
+			maxKey = argv[0] + 8;
 	  else
 			fprintf(stderr, "Unknown option %s ignored\n", argv[0]);
 
@@ -530,8 +530,8 @@ void *index[1];
 	  args[idx].database = database;
 	  args[idx].inFile = argv[idx];
 	  args[idx].idxType = idxType;
-	  args[idx].startKey = startKey;
-	  args[idx].endKey = endKey;
+	  args[idx].minKey = minKey;
+	  args[idx].maxKey = maxKey;
 	  args[idx].keyLen = keyLen;
 	  args[idx].noDocs = noDocs;
 	  args[idx].useTxn = useTxn;

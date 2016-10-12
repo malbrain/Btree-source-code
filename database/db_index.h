@@ -37,7 +37,7 @@ Status storeDoc(DocHndl *docHndl, Handle *hndl, void *obj, uint32_t objSize, Obj
 Status installIndexes(DocHndl *docHndl);
 
 Status dbPositionCursor(DbCursor *cursor, uint8_t *key, uint32_t keyLen);
-Status dbNextKey(DbCursor *cursor, Handle *index, uint8_t *endKey, uint32_t endLen);
-Status dbPrevKey(DbCursor *cursor, Handle *index, uint8_t *endKey, uint32_t endLen);
-Status dbNextDoc(DbCursor *cursor, uint8_t *endKey, uint32_t endLen);
-Status dbPrevDoc(DbCursor *cursor, uint8_t *endKey, uint32_t endLen);
+Status dbNextKey(DbCursor *cursor, Handle *index, uint8_t *maxKey, uint32_t maxLen);
+Status dbPrevKey(DbCursor *cursor, Handle *index, uint8_t *maxKey, uint32_t maxLen);
+Status dbNextDoc(DbCursor *cursor, uint8_t *maxKey, uint32_t maxLen);
+Status dbPrevDoc(DbCursor *cursor, uint8_t *maxKey, uint32_t maxLen);

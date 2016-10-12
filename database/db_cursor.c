@@ -32,7 +32,7 @@ bool found;
 	return OK;
 }
 
-Status dbNextDoc(DbCursor *cursor, uint8_t *endKey, uint32_t endLen) {
+Status dbNextDoc(DbCursor *cursor, uint8_t *maxKey, uint32_t maxLen) {
 ArrayEntry *array;
 Txn *txn = NULL;
 uint64_t *ver;
@@ -43,7 +43,7 @@ Status stat;
 		return ERROR_arenadropped;
 
 	while (true) {
-	  if ((stat = dbNextKey(cursor, index, endKey, endLen)))
+	  if ((stat = dbNextKey(cursor, index, maxKey, maxLen)))
 		break;
 
 	  if (index->map->arenaDef->useTxn)
@@ -68,7 +68,7 @@ Status stat;
 	return stat;
 }
 
-Status dbPrevDoc(DbCursor *cursor, uint8_t *endKey, uint32_t endLen) {
+Status dbPrevDoc(DbCursor *cursor, uint8_t *maxKey, uint32_t maxLen) {
 ArrayEntry *array;
 Txn *txn = NULL;
 uint64_t *ver;
@@ -79,7 +79,7 @@ Status stat;
 		return ERROR_arenadropped;
 
 	while (true) {
-	  if ((stat = dbPrevKey(cursor, index, endKey, endLen)))
+	  if ((stat = dbPrevKey(cursor, index, maxKey, maxLen)))
 		break;
 
 	  if (index->map->arenaDef->useTxn)
@@ -104,7 +104,7 @@ Status stat;
 	return stat;
 }
 
-Status dbNextKey(DbCursor *cursor, Handle *index, uint8_t *endKey, uint32_t endLen) {
+Status dbNextKey(DbCursor *cursor, Handle *index, uint8_t *maxKey, uint32_t maxLen) {
 bool release = false;
 uint32_t len;
 Status stat;
@@ -132,13 +132,13 @@ Status stat;
 	if (stat)
 		return stat;
 
-	if (endKey) {
+	if (maxKey) {
 		len = cursor->keyLen;
 
-		if (len > endLen)
-			len = endLen;
+		if (len > maxLen)
+			len = maxLen;
 
-		if (memcmp (cursor->key, endKey, len) >= 0)
+		if (memcmp (cursor->key, maxKey, len) >= 0)
 			stat = ERROR_endoffile;
 	}
 
@@ -148,7 +148,7 @@ Status stat;
 	return stat;
 }
 
-Status dbPrevKey(DbCursor *cursor, Handle *index, uint8_t *endKey, uint32_t endLen) {
+Status dbPrevKey(DbCursor *cursor, Handle *index, uint8_t *maxKey, uint32_t maxLen) {
 bool release = false;
 uint32_t len;
 Status stat;
@@ -176,13 +176,13 @@ Status stat;
 	if (stat)
 		return stat;
 
-	if (endKey) {
+	if (maxKey) {
 		len = cursor->keyLen;
 
-		if (len > endLen)
-			len = endLen;
+		if (len > maxLen)
+			len = maxLen;
 
-		if (memcmp (cursor->key, endKey, len) <= 0)
+		if (memcmp (cursor->key, maxKey, len) <= 0)
 			stat = ERROR_endoffile;
 	}
 
