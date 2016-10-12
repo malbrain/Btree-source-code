@@ -1,1 +1,0 @@
-cc -O3 -g -o dbtest db*.c artree/*.c btree1/*.c standalone.c -lpthread
