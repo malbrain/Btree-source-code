@@ -113,4 +113,23 @@ Sample cursor scan count of 40M pennysort records:
      user 0m18.457s
      sys  0m2.123s
 
+Sample cursor scan with min and max values:
+
+    [karl@test7x64 xlink]$ ./dbtest tstdb -cmds=s -startKey=aaaA -endKey=aaaK -noDocs
+    started scanning min key: aaaA max key: aaaK
+    aaaATP)O4j
+    aaaBx&\7,4
+    aaaE%(2YNR
+    aaaF~E 1:w
+    aaaG?n!En5
+    aaaGQBoH:`
+    aaaGtu4)28
+    aaaGy2q2wI
+    aaaH8EX{6k
+    aaaJb'}Wk_
+     Total keys read 10
+     real 0m0.000s
+     user 0m0.000s
+     sys  0m0.001s
+
 Please address any concerns problems, or suggestions to the program author, Karl Malbrain, malbrain@cal.berkeley.edu

@@ -303,10 +303,10 @@ FILE *in;
 		fprintf(stderr, "started scanning");
 
 		if (args->startKey)
-			fprintf(stderr, " at key: %s", args->startKey);
+			fprintf(stderr, " min key: %s", args->startKey);
 
 		if (args->endKey)
-			fprintf(stderr, " thru key: %s", args->endKey);
+			fprintf(stderr, " max key: %s", args->endKey);
 
 		fprintf(stderr, "\n");
 
@@ -346,10 +346,10 @@ FILE *in;
 		fprintf(stderr, "started reverse scanning");
 
 		if (args->startKey)
-			fprintf(stderr, " at key: %s", args->startKey);
+			fprintf(stderr, " min key: %s", args->startKey);
 
 		if (args->endKey)
-			fprintf(stderr, " thru key: %s", args->endKey);
+			fprintf(stderr, " max key: %s", args->endKey);
 
 		fprintf(stderr, "\n");
 
@@ -389,10 +389,10 @@ FILE *in;
 		fprintf(stderr, "started counting");
 
 		if (args->startKey)
-			fprintf(stderr, " at key: %s", args->startKey);
+			fprintf(stderr, " min key: %s", args->startKey);
 
 		if (args->endKey)
-			fprintf(stderr, " thru key: %s", args->endKey);
+			fprintf(stderr, " max key: %s", args->endKey);
 
 		fprintf(stderr, "\n");
 
