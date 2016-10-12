@@ -3,9 +3,9 @@ Btree-source-code
 
 A working project for High-concurrency B-tree source code in C.  You probably want to download the database project for the latest developement version.  Most C files compile under both Windows and Linux.
 
-Here are the projects under btree-source-code:
+Note:  The most recent multi-threaded/multi-process btree and ARTree code can be found in repository:  https://github.com/malbrain/database.
 
-* database:		Multi-Threaded/Multi-Process multiple MVCC document store with transactions and automatic index management.  Cursors enumerate documents in key order.
+Here are the projects under btree-source-code:
 
 * btree2:		Single Threaded/MultiProcess versions that remove keys all the way back to an original empty btree, placing removed nodes on a free list.  Operates under either memory mapping or file I/O.  Recommended btrees hosted on network file systems.
 
