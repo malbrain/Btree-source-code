@@ -239,12 +239,12 @@ Status stat;
 //	iterate cursor to next key
 //	return zero on Eof
 
-Status nextKey(void **hndl, uint8_t **key, uint32_t *keyLen) {
+Status nextKey(void **hndl, uint8_t **key, uint32_t *keyLen, uint8_t *endKey, uint32_t endLen) {
 DbCursor *cursor;
 Status stat;
 
 	if ((cursor = *hndl))
-		stat = dbNextKey(cursor, NULL);
+		stat = dbNextKey(cursor, NULL, endKey, endLen);
 	else
 		return ERROR_arenadropped;
 
@@ -262,12 +262,12 @@ Status stat;
 //	iterate cursor to prev key
 //	return zero on Bof
 
-uint32_t prevKey(void **hndl, uint8_t **key, uint32_t *keyLen) {
+uint32_t prevKey(void **hndl, uint8_t **key, uint32_t *keyLen, uint8_t *endKey, uint32_t endLen) {
 DbCursor *cursor;
 Status stat;
 
 	if ((cursor = *hndl))
-		stat = dbPrevKey(cursor, NULL);
+		stat = dbPrevKey(cursor, NULL, endKey, endLen);
 	else
 		return ERROR_arenadropped;
 
@@ -284,12 +284,12 @@ Status stat;
 
 //	iterate cursor to next document
 
-Status nextDoc(void **hndl, Document **doc) {
+Status nextDoc(void **hndl, Document **doc, uint8_t *endKey, uint32_t endLen) {
 DbCursor *cursor;
 Status stat;
 
 	if ((cursor = *hndl))
-		stat = dbNextDoc(cursor);
+		stat = dbNextDoc(cursor, endKey, endLen);
 	else
 		return ERROR_handleclosed;
 
@@ -301,12 +301,12 @@ Status stat;
 
 //	iterate cursor to previous document
 
-Status prevDoc(void **hndl, Document **doc) {
+Status prevDoc(void **hndl, Document **doc, uint8_t *endKey, uint32_t endLen) {
 DbCursor *cursor;
 Status stat;
 
 	if ((cursor = *hndl))
-		stat = dbPrevDoc(cursor);
+		stat = dbPrevDoc(cursor, endKey, endLen);
 	else
 		return ERROR_handleclosed;
 

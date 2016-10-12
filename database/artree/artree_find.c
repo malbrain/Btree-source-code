@@ -178,5 +178,14 @@ CursorStack* stack;
 	if (slot->type == KeyPass)
 		return true;
 
+	if (cursor)
+	  if (cursor->depth < MAX_cursor) {
+		stack = cursor->stack + cursor->depth++;
+		stack->off = cursor->base->keyLen;
+		stack->slot->bits = slot->bits;;
+		stack->addr = slot;
+		stack->ch = -1;
+	  }
+
 	return false;
 }

@@ -32,7 +32,7 @@ bool found;
 	return OK;
 }
 
-Status dbNextDoc(DbCursor *cursor) {
+Status dbNextDoc(DbCursor *cursor, uint8_t *endKey, uint32_t endLen) {
 ArrayEntry *array;
 Txn *txn = NULL;
 uint64_t *ver;
@@ -43,7 +43,7 @@ Status stat;
 		return ERROR_arenadropped;
 
 	while (true) {
-	  if ((stat = dbNextKey(cursor, index)))
+	  if ((stat = dbNextKey(cursor, index, endKey, endLen)))
 		break;
 
 	  if (index->map->arenaDef->useTxn)
@@ -68,7 +68,7 @@ Status stat;
 	return stat;
 }
 
-Status dbPrevDoc(DbCursor *cursor) {
+Status dbPrevDoc(DbCursor *cursor, uint8_t *endKey, uint32_t endLen) {
 ArrayEntry *array;
 Txn *txn = NULL;
 uint64_t *ver;
@@ -79,7 +79,7 @@ Status stat;
 		return ERROR_arenadropped;
 
 	while (true) {
-	  if ((stat = dbPrevKey(cursor, index)))
+	  if ((stat = dbPrevKey(cursor, index, endKey, endLen)))
 		break;
 
 	  if (index->map->arenaDef->useTxn)
@@ -104,8 +104,9 @@ Status stat;
 	return stat;
 }
 
-Status dbNextKey(DbCursor *cursor, Handle *index) {
+Status dbNextKey(DbCursor *cursor, Handle *index, uint8_t *endKey, uint32_t endLen) {
 bool release = false;
+uint32_t len;
 Status stat;
 
 	if (!index)
@@ -128,14 +129,28 @@ Status stat;
 		break;
 	}
 
+	if (stat)
+		return stat;
+
+	if (endKey) {
+		len = cursor->keyLen;
+
+		if (len > endLen)
+			len = endLen;
+
+		if (memcmp (cursor->key, endKey, len) >= 0)
+			stat = ERROR_endoffile;
+	}
+
 	if (release)
 		releaseHandle(index);
 
 	return stat;
 }
 
-Status dbPrevKey(DbCursor *cursor, Handle *index) {
+Status dbPrevKey(DbCursor *cursor, Handle *index, uint8_t *endKey, uint32_t endLen) {
 bool release = false;
+uint32_t len;
 Status stat;
 
 	if (!index)
@@ -156,6 +171,19 @@ Status stat;
 	default:
 		stat = ERROR_indextype;
 		break;
+	}
+
+	if (stat)
+		return stat;
+
+	if (endKey) {
+		len = cursor->keyLen;
+
+		if (len > endLen)
+			len = endLen;
+
+		if (memcmp (cursor->key, endKey, len) <= 0)
+			stat = ERROR_endoffile;
 	}
 
 	if (release)

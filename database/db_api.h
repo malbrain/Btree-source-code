@@ -21,11 +21,11 @@ Status commitTxn(void **database, ObjId txnId);
 
 Status addDocument(void **hndl, void *obj, uint32_t objSize, ObjId *objId, ObjId txnId);
 Status insertKey(void **index, uint8_t *key, uint32_t len);
-Status nextDoc(void **hndl, Document **doc);
-Status prevDoc(void **hndl, Document **doc);
+Status nextDoc(void **hndl, Document **doc, uint8_t *endKey, uint32_t endLen);
+Status prevDoc(void **hndl, Document **doc, uint8_t *endKey, uint32_t endLen);
 Status addIndexKeys(void **dochndl);
 
-Status nextKey(void **hndl, uint8_t **key, uint32_t *keyLen);
-Status prevKey(void **hndl, uint8_t **key, uint32_t *keyLen);
+Status nextKey(void **hndl, uint8_t **key, uint32_t *keyLen, uint8_t *endKey, uint32_t endLen);
+Status prevKey(void **hndl, uint8_t **key, uint32_t *keyLen, uint8_t *endKey, uint32_t endLen);
 
 bool positionCursor(void **hndl, uint8_t *key, uint32_t keyLen);
