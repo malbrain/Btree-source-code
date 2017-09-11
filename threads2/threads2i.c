@@ -378,7 +378,7 @@ ushort prev;
 		latch->share++;
 
 #ifdef unix
-	*latch->mutex = 0;
+	__sync_lock_release (latch->mutex);
 #else
 	_InterlockedExchange8(latch->mutex, 0);
 #endif
@@ -412,7 +412,7 @@ uint prev;
 	else
 		latch->pending = 1;
 #ifdef unix
-	*latch->mutex = 0;
+	__sync_lock_release (latch->mutex);
 #else
 	_InterlockedExchange8(latch->mutex, 0);
 #endif
@@ -447,7 +447,7 @@ uint prev;
 		latch->exclusive = 1;
 
 #ifdef unix
-	*latch->mutex = 0;
+	__sync_lock_release (latch->mutex);
 #else
 	_InterlockedExchange8(latch->mutex, 0);
 #endif
@@ -467,7 +467,7 @@ void bt_spinreleasewrite(BtSpinLatch *latch)
 #endif
 	latch->exclusive = 0;
 #ifdef unix
-	*latch->mutex = 0;
+	__sync_lock_release (latch->mutex);
 #else
 	_InterlockedExchange8(latch->mutex, 0);
 #endif
@@ -486,7 +486,7 @@ void bt_spinreleaseread(BtSpinLatch *latch)
 #endif
 	latch->share--;
 #ifdef unix
-	*latch->mutex = 0;
+	__sync_lock_release (latch->mutex);
 #else
 	_InterlockedExchange8(latch->mutex, 0);
 #endif
