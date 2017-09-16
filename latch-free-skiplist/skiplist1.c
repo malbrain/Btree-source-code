@@ -1,4 +1,10 @@
 // latch-free skiplist btree version skiplist1.c
+//	this is under development -- it compiles but doesn't run
+
+//	features power of two btree file size increases
+//	skiplist access to write optimization buffer
+//	bi-directional cursors
+//	larger sized leaf pages than non-leaf
 
 // 15 SEP 2017
 
@@ -41,6 +47,14 @@ REDISTRIBUTION OF THIS SOFTWARE.
 #include <errno.h>
 #include <pthread.h>
 #include <limits.h>
+
+#ifdef apple
+#include <libkern/OSAtomic.h>
+#define pause() OSMemoryBarrier()
+#else
+#define pause() __asm __volatile("pause\n": : : "memory")
+#endif
+
 #else
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -55,11 +69,18 @@ REDISTRIBUTION OF THIS SOFTWARE.
 #include <memory.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdbool.h>
 
-typedef unsigned long long	uid;
-typedef unsigned long long	logseqno;
+typedef union {
+	uint64_t uid;
+	struct {
+		uint32_t num;
+		uint16_t seg;
+	};
+} BtUid;
 
-#ifndef unix
+#ifdef _WIN32
 typedef unsigned long long	off64_t;
 typedef unsigned short		ushort;
 typedef unsigned int		uint;
@@ -68,17 +89,17 @@ typedef unsigned int		uint;
 #define BT_ro 0x6f72	// ro
 #define BT_rw 0x7772	// rw
 
+#define BT_maxseg		1024				// size of the BTree segment table
 #define BT_pagebits		4					// page allocation unit size in bits
+#define BT_pagealloc	(1 << BT_pagebits)	// page allocation unit size in bytes
+
 #define BT_maxbits		20					// maximum page size in bits
 #define BT_minbits		9					// minimum page size in bits
 #define BT_minpage		(1 << BT_minbits)	// minimum page size
 #define BT_maxpage		(1 << BT_maxbits)	// maximum page size
 
-//  BTree page number constants
-#define ALLOC_page		0	// allocation page
-#define ROOT_page		1	// root of the btree
-
 //	Number of levels to create in a new BTree
+
 #define MIN_lvl			2
 
 typedef struct {
@@ -92,15 +113,11 @@ typedef struct {
   };
 } MutexLatch;
 
-//	Define the length of the page numbers
-
-#define BtId 6
-
 //	Page key entry definition.
 
 //	Keys are marked dead, but remain on the page until
-//	it cleanup is called. The fence key (highest key) for
-//	a leaf page is always present, even after cleanup.
+//	the page is reorganized. The fence key (highest key) for
+//	a leaf page is always present.
 
 typedef enum {
 	Unique,
@@ -123,87 +140,111 @@ typedef struct {
 //	the key value
 
 typedef struct {
-	unsigned char len;		// this can be either 1 or 2 bytes depending on high-order bit
-	unsigned char key[0];
+	unsigned char len[1];	// this can be either 1 or 2 bytes depending on high-order bit
+	unsigned char key[0];	// the key value bytes
 } BtKey;
 
-#define BT_maxkey	32767		// maximum number of bytes in a key
+#define BT_maxkey	32767	// maximum number of bytes in a key
+
+//	page status enum
+
+typedef enum {
+	PageActive = 0,				// active page being allocated
+	PageFull,					// full page being reorganized
+	PageFwd,					// page has been forwarded
+	PageKill					// empty page being deleted
+} PageState;
 
 //	The first part of an index page.
 //	It is immediately followed
-//	by the BtEntries of the keys.
+//	by the BtEntries for the keys.
 
-typedef struct BtPage_ {
+//	NB: the max field is zero for an uninitialized page
+
+typedef struct {
 	union {
-		unsigned char base[1];		// byte offset page addressing
-		unsigned char lvl;			// level of page, zero = leaf
+		unsigned char base[1];	// byte address for page offsets
+		struct {
+			ushort max;			// next available page offset (also serves as page version)
+			uint8_t state;		// page state enum
+		};
+		uint allocation[1];		// all elements above
 	};
-	unsigned char free;			// page is on the free chain
-	unsigned char kill;			// page is being deleted
-	unsigned char rebuild;		// page latch to rebuild
-	ushort off;					// next available page offset
-	ushort act;					// count of active keys
-	ushort garbage;				// amount of page garbage
-	uid right, left, next;		// page numbers to right, left and replacement
-} *BtPage;
+	uint8_t lvl, bits;			// level of page, zero = leaf, page size in bits
+	ushort right, left;			// page offsets to find left/right page numbers
+	uint repl[1];				// page offset to find next page number
+#ifdef _WIN32
+	SRWLOCK rebuild[1];			// mutex to reorganize page
+#endif
+} BtPage;
 
-//  The loadpage interface object
-
-typedef struct {
-	BtPage page;		// current page pointer
-} BtPageSet;
-
-//	structure for latch manager on shared ALLOC_page
+//	Btree Segment table
 
 typedef struct {
-	uid allocpage;					// page number of first available page
-	uid freechain;					// head of free page_nos chain
-	uid leafchain;					// head of leaf page_nos chain
-	uid leaf_page;					// page number of leftmost leaf
-	uid rightleaf;					// page number of rightmost leaf
-	uid leafpromote;				// next leaf page to try promotion
-	unsigned long long upperpages;	// number of active upper pages
-	unsigned long long leafpages;	// number of active leaf pages
+	uint64_t size;					// size of the segment
+	uint64_t offset;				// starting offset of the segment
+} BtSegment;
+
+//	global structure for BTREE
+
+typedef struct {
+	BtUid rootpage;					// page number of btree root
+	BtUid leafpage;					// page number of first btree leaf page
+	BtUid freechain;				// head of free page_nos chain
+	BtUid leafchain;				// head of leaf page_nos chain
+	BtUid leaf_page;				// page number of leftmost leaf
+	BtUid rightleaf;				// page number of rightmost leaf
+	BtUid leafpromote;				// next leaf page to try promotion
 	unsigned char leaf_xtra;		// leaf page size in xtra bits
 	unsigned char page_bits;		// base page size in bits
 	MutexLatch promote[1];			// promotion lite latch
 	MutexLatch lock[1];				// allocation area lite latch
+	MutexLatch maps[1];				// segment table mutex
+	uint nextseg;					// number of created segments
+	BtSegment segs[BT_maxseg];		// created segments in Btree
 } BtPageZero;
 
 //	The object structure for Btree access
 
 typedef struct {
-	uint page_size;				// base page size	
-	uint page_bits;				// base page size in bits	
-	uint leaf_xtra;				// leaf xtra bits	
+	uint page_size;			// base page size	
+	uint page_bits;			// base page size in bits	
+	uint leaf_xtra;			// leaf xtra bits	
 #ifdef unix
 	int idx;
 #else
 	HANDLE idx;
 #endif
-	BtPageZero *pagezero;		// mapped allocation page
-	uint maxleaves;				// leaf page count to begin promote
-	int err;					// last error
-	int line;					// last error line no
-	int found;					// number of keys found by delete
-	int type;					// type of LSM tree 0=cache, 1=main
-	uint maxseg;				// max number of memory mapped segments
-	uint segments;				// number of memory mapped segments in use
-	MutexLatch maps[1];			// segment table mutex
-	unsigned char **pages;		// memory mapped segments of b-tree
+	BtPageZero *pagezero;	// mapped allocation page
+	uint maxleaves;			// leaf page count to begin promote
+	int err;				// last error
+	int line;				// last error line no
+	int found;				// number of keys found by delete
+	int type;				// type of LSM tree 0=cache, 1=main
+	uint maxseg;			// max number of memory mapped segments
+	uint segments;			// number of memory mapped segments in use
+	char *mapbase[BT_maxseg];// pointers to mapped segment memory
+#ifdef _WIN32
+	HANDLE maphndl[BT_maxseg];
+#endif
 } BtMgr;
+
+typedef struct {
+	BtPage *page;			// current page pointer
+	ushort version;			// initial version of page 
+} BtAccess;
 
 //	btree handle (one per thread)
 
 typedef struct {
 	BtMgr *mgr;					// buffer manager for entire process
 	BtMgr *main;				// buffer manager for main btree
-	BtPageSet cacheset[1];		// cached page frame for cache btree
-	BtPageSet mainset[1];		// cached page frame for main btree
+	BtAccess cacheset[1];		// current page frame for cache btree
+	BtAccess mainset[1];		// current page frame for main btree
 	ushort phase;				// 1 = main btree 0 = cache btree 2 = both
 	BtEntry *cachekey;
 	BtEntry *mainkey;
-} BtDb;
+} BtHandle;
 
 //	Catastrophic errors
 
@@ -219,7 +260,9 @@ typedef enum {
 } BTERR;
 
 //  The btree page is allocated from the bottom in BT_pagebits units
-//	and consists of a sequence of keys indexed by a skiplist.
+//	and consists of a sequence of keys indexed by a skiplist,
+//	or uint64_t page numbers.
+
 //  Each key has a skiplist tower that links the keys into
 //	sorted order.
 
@@ -227,33 +270,90 @@ typedef enum {
 //	or the page is split into two pages, with the old (full) page
 //	pointing to the first new page replacement.
 
-//  A key consists of one or two length bytes.
+//  A key consists of one or two length bytes, followed by the key value bytes.
 
-//  Associated with each key is a value byte string
-//	consisting of one or two length bytes and followed
-//	by any value desired.
-
-//	The b-tree pages are linked with next
-//	pointers to facilitate enumerators,
-//	and provide for concurrency.
+//	The b-tree pages are linked to the left and right with next
+//	pointers to facilitate enumerators, and provide for concurrency.
 
 //	When to root page fills, it is split in two and
 //	the tree height is raised by a new root w/two keys.
 
-//	Deleted keys are marked with a dead bit until
-//	page cleanup. The original fence key for a leaf node is
+//	Deleted keys are marked with a dead status until page
+//	reorganization. The original fence key for a leaf node is
 //	always present
 
-//  Page 0 is dedicated to lock for new page extensions,
-//	and chains empty pages together for reuse.
+//  Page 0 is dedicated for the global btree values.
+//	Empty pages are chained together through page zero and reused.
 
-//	Empty pages are chained together through the ALLOC page and reused.
+#define entryptr(page, off) ((BtEntry *)(page->base + off * BT_pagealloc))
+#define uidptr(page, off) ((BtUid *)(page->base +  off * BT_pagealloc))
 
-#define entryptr(page, off) (BtEntry *)(page->base + off)
+#ifdef linux
+int sys_futex(void *addr1, int op, int val1, struct timespec *timeout, void *addr2, int val3)
+{
+	return syscall(SYS_futex, addr1, op, val1, timeout, addr2, val3);
+}
+#endif
+
+bool bt_installuint (uint *where, uint test, uint what) {
+
+#ifdef WIN32
+	return InterlockCompareExchange(where, what, test) == test;
+#else
+	return __sync_bool_compare_and_swap(where, test, what);
+#endif
+}
+
+//	allocate space at the end of a page
+//	the page state must be PageActive (i.e. zero)
+
+//  return zero if page is no longer active
+//	or it doesn't fit otherwise return
+//	the allocated offset
+
+ushort bt_allocpage(BtPage *page, ushort request) {
+uint amt = (request + BT_pagealloc - 1) & -BT_pagealloc;
+uint offset = page->max;
+
+	if ((offset + amt) << BT_pagebits < (1 << page->bits) )
+	  if (bt_installuint(page->allocation, offset, offset + amt))
+		return offset;
+
+	return 0;
+}
+
+//	bind page from stored page number
+
+BtPage *bt_bindpage(BtMgr *mgr, BtPage *page, ushort off) {
+BtUid *uid = uidptr(page, off);
+
+	return (BtPage *)(mgr->mapbase[uid->seg] + ((uint64_t)uid->num << mgr->page_bits));
+}
+
+//	access next page version
+//	WIN32 uses SRW lock
+
+BTERR bt_movepage (BtMgr *mgr, BtAccess *set) {
+
+  while (!set->page->repl[0]) {
+#ifdef linux
+	sys_futex (set->page->repl, FUTEX_WAIT, 0, NULL, NULL, 0);
+#elif defined(_WIN32)
+	if (set->page->state != PageFwd)
+		AcquireSRWLockShared(set->page->rebuild);
+#else
+	pause();
+#endif
+  } 
+
+  set->page = bt_bindpage(mgr, set->page, set->page->repl[0]);
+  set->version = set->page->max;
+  return BTERR_ok;
+}
 
 #if 0 // end of code conversion so far
 
-// B-Tree functions
+// B-Tree API functions
 
 extern void bt_close (BtDb *bt);
 extern BtDb *bt_open (BtMgr *mgr, BtMgr *main);
@@ -282,35 +382,9 @@ BTERR bt_promote (BtDb *bt);
 #define valptr(page, slot) ((BtVal*)(keyptr(page,slot)->key + keyptr(page,slot)->len))
 #define fenceptr(page) ((BtKey*)((unsigned char*)(page) + page->fence))
 
-void bt_putid(unsigned char *dest, uid id)
-{
-int i = BtId;
-
-	while( i-- )
-		dest[i] = (unsigned char)id, id >>= 8;
-}
-
-uid bt_getid(unsigned char *src)
-{
-uid id = 0;
-int i;
-
-	for( i = 0; i < BtId; i++ )
-		id <<= 8, id |= *src++; 
-
-	return id;
-}
-
-//	lite weight spin lock Latch Manager
-
 pid_t sys_gettid ()
 {
 	return syscall(SYS_gettid);
-}
-
-int sys_futex(void *addr1, int op, int val1, struct timespec *timeout, void *addr2, int val3)
-{
-	return syscall(SYS_futex, addr1, op, val1, timeout, addr2, val3);
 }
 
 void bt_mutexlock(MutexLatch *latch)
@@ -353,64 +427,6 @@ MutexLatch prev[1];
 		sys_futex( latch->value, FUTEX_WAKE, 1, NULL, NULL, 0 );
 }
 
-//	reader/writer lock implementation
-
-void WriteLock (RWLock *lock, pid_t tid, uint line)
-{
-	if( tid && lock->tid == tid ) {
-		lock->dup++;
-		return;
-	}
-	bt_mutexlock (lock->xcl);
-	bt_mutexlock (lock->wrt);
-	bt_releasemutex (lock->xcl);
-	lock->tid = tid;
-#ifdef DEBUG
-	lock->line = line;
-#endif
-}
-
-void WriteRelease (RWLock *lock)
-{
-	if( lock->dup ) {
-		lock->dup--;
-		return;
-	}
-	lock->tid = 0;
-	bt_releasemutex (lock->wrt);
-}
-
-void ReadLock (RWLock *lock)
-{
-	bt_mutexlock (lock->xcl);
-
-	if( !__sync_fetch_and_add (&lock->readers, 1) )
-		bt_mutexlock (lock->wrt);
-
-	bt_releasemutex (lock->xcl);
-}
-
-void ReadRelease (RWLock *lock)
-{
-	if( __sync_fetch_and_sub (&lock->readers, 1) == 1 )
-		bt_releasemutex (lock->wrt);
-}
-
-//	read page into buffer pool from permanent location in Btree file
-
-BTERR bt_readpage (BtMgr *mgr, BtPage page, uid page_no, uint leaf)
-{
-uint page_size = mgr->page_size;
-
-  if( leaf )
-	page_size <<= mgr->leaf_xtra;
-
-  if( pread(mgr->idx, page, page_size, page_no << mgr->page_bits) < page_size )
-	return mgr->err = BTERR_read;
-
-  return 0;
-}
-
 //	write page to location in Btree file
 
 BTERR bt_writepage (BtMgr *mgr, BtPage page, uid page_no, uint leaf)
@@ -426,168 +442,6 @@ uint page_size = mgr->page_size;
   return 0;
 }
 
-//	decrement pin count
-
-void bt_unpinlatch (BtLatchSet *latch)
-{
-	bt_mutexlock(latch->modify);
-	latch->pin--;
-	bt_releasemutex(latch->modify);
-}
-
-//  return the btree cached page address
-
-BtPage bt_mappage (BtMgr *mgr, BtLatchSet *latch)
-{
-uint segment = latch->page_no >> SEG_bits;
-int flag = PROT_READ | PROT_WRITE;
-uid mask = (uid)1 << SEG_bits;
-BtPage page;
-
-  bt_mutexlock (mgr->maps);
-  mask--;
-
-  while( 1 ) {
-	if( segment < mgr->segments ) {
-	  page = (BtPage)(mgr->pages[segment] + ((latch->page_no & mask) << mgr->page_bits));
-
-	  bt_releasemutex (mgr->maps);
-	  return page;
-	}
-
-	if( mgr->segments < mgr->maxseg ) {
-	  mgr->pages[mgr->segments] = mmap (0, (uid)mgr->page_size << SEG_bits, flag, MAP_SHARED, mgr->idx, (uid)mgr->segments << mgr->page_bits << SEG_bits);
-	  mgr->segments++;
-	  continue;
-	}
-
-	mgr->maxseg <<= 1;
-	mgr->pages = realloc (mgr->pages, mgr->maxseg * sizeof(void *));
-  }
-}
-
-//  return next available latch entry
-//	  and with latch entry locked
-
-uint bt_availnext (BtMgr *mgr)
-{
-BtLatchSet *latch;
-uint entry;
-
-  while( 1 ) {
-#ifdef unix
-	entry = __sync_fetch_and_add (&mgr->pagezero->latchvictim, 1) + 1;
-#else
-	entry = _InterlockedIncrement (&mgr->pagezero->latchvictim);
-#endif
-	entry %= mgr->pagezero->latchtotal;
-
-	if( !entry )
-		continue;
-
-	latch = mgr->latchsets + entry;
-
-	if( !bt_mutextry(latch->modify) )
-		continue;
-
-	//  return this entry if it is not pinned
-
-	if( !latch->pin )
-		return entry;
-
-	bt_releasemutex(latch->modify);
-  }
-}
-
-//	pin latch in latch pool
-
-BtLatchSet *bt_pinlatch (BtMgr *mgr, uid page_no)
-{
-uint hashidx = page_no % mgr->pagezero->latchhash;
-uint entry, oldidx;
-BtLatchSet *latch;
-BtPage page;
-
-  //  try to find our entry
-
-  bt_mutexlock(mgr->hashtable[hashidx].latch);
-
-  if( entry = mgr->hashtable[hashidx].entry ) do
-  {
-	latch = mgr->latchsets + entry;
-
-	if( page_no == latch->page_no )
-		break;
-  } while( entry = latch->next );
-
-  //  found our entry: increment pin
-
-  if( entry ) {
-	latch = mgr->latchsets + entry;
-	bt_mutexlock(latch->modify);
-	latch->pin++;
-	bt_releasemutex(latch->modify);
-	bt_releasemutex(mgr->hashtable[hashidx].latch);
-	return latch;
-  }
-
-  //  find and reuse unpinned entry
-
-trynext:
-  entry = bt_availnext (mgr);
-  latch = mgr->latchsets + entry;
-  oldidx = latch->page_no % mgr->pagezero->latchhash;
-
-  //  skip over this entry if latch not available
-
-  if( latch->page_no )
-   if( oldidx != hashidx )
-    if( !bt_mutextry (mgr->hashtable[oldidx].latch) ) {
-	  bt_releasemutex(latch->modify);
-	  goto trynext;
-	}
-
-  //  if latch is on a different hash chain
-  //	unlink from the old page_no chain
-
-  if( latch->page_no )
-   if( oldidx != hashidx ) {
-	if( latch->prev )
-	  mgr->latchsets[latch->prev].next = latch->next;
-	else
-	  mgr->hashtable[oldidx].entry = latch->next;
-
-	if( latch->next )
-	  mgr->latchsets[latch->next].prev = latch->prev;
-
-    bt_releasemutex (mgr->hashtable[oldidx].latch);
-   }
-
-  //  link page as head of hash table chain
-  //  if this is a never before used entry,
-  //  or it was previously on a different
-  //  hash table chain. Otherwise, just
-  //  leave it in its current hash table
-  //  chain position.
-
-  if( !latch->page_no || hashidx != oldidx ) {
-	if( latch->next = mgr->hashtable[hashidx].entry )
-	  mgr->latchsets[latch->next].prev = entry;
-
-	mgr->hashtable[hashidx].entry = entry;
-    latch->prev = 0;
-  }
-
-  //  fill in latch structure
-
-  latch->page_no = page_no;
-  latch->pin = 1;
-
-  bt_releasemutex (latch->modify);
-  bt_releasemutex (mgr->hashtable[hashidx].latch);
-  return latch;
-}
-  
 void bt_mgrclose (BtMgr *mgr)
 {
 char *name = mgr->type ? "Main" : "Cache";
@@ -595,11 +449,6 @@ BtLatchSet *latch;
 uint num = 0;
 BtPage page;
 uint entry;
-
-	//	flush previously written dirty pages
-	//	and write recovery buffer to disk
-
-	fdatasync (mgr->idx);
 
 #ifdef unix
 	while( mgr->segments )
@@ -766,20 +615,7 @@ BtMgr* mgr;
 	if( !initit )
 		goto mgrlatch;
 
-	//  calculate number of latch table & hash entries
-
 	memset (pagezero, 0, 1 << pagebits);
-	pagezero->nlatchpage = nodemax/16 * sizeof(BtHashEntry);
-
-	pagezero->nlatchpage += sizeof(BtLatchSet) * nodemax + mgr->page_size - 1;
-	pagezero->nlatchpage >>= mgr->page_bits;
-	pagezero->latchtotal = nodemax;
-
-	pagezero->latchhash = (((uid)pagezero->nlatchpage<< mgr->page_bits) - nodemax * sizeof(BtLatchSet)) / sizeof(BtHashEntry);
-
-	// initialize an empty b-tree with alloc page, root page, leaf page
-	// and page(s) of latches and page pool cache
-
 	pagezero->page_bits = mgr->page_bits;
 	pagezero->leaf_xtra = leafxtra;
 	pagezero->upperpages = 1;
@@ -858,11 +694,6 @@ mgrlatch:
 	mgr->pagezero = (BtPageZero *)mgr->pages[0];
 //	mlock (mgr->pagezero, mgr->page_size);
 
-	//	allocate latch pool
-
-	mgr->latchsets = (BtLatchSet *)(mgr->pages[0] + ((uid)LATCH_page << mgr->page_bits));
-	mgr->hashtable = (BtHashEntry *)(mgr->latchsets + mgr->pagezero->latchtotal);
-
 	return mgr;
 }
 
@@ -902,60 +733,7 @@ int ans;
 	return 0;
 }
 
-// place write, read, or parent lock on requested page_no.
-
-void bt_lockpage(BtLock mode, BtLatchSet *latch, pid_t tid, uint line)
-{
-	switch( mode ) {
-	case BtLockRead:
-		ReadLock (latch->readwr);
-		break;
-	case BtLockWrite:
-		WriteLock (latch->readwr, tid, line);
-		break;
-	case BtLockAccess:
-		ReadLock (latch->access);
-		break;
-	case BtLockDelete:
-		WriteLock (latch->access, tid, line);
-		break;
-	case BtLockParent:
-		WriteLock (latch->parent, tid, line);
-		break;
-	case BtLockLink:
-		WriteLock (latch->link, tid, line);
-		break;
-	}
-}
-
-// remove write, read, or parent lock on requested page
-
-void bt_unlockpage(BtLock mode, BtLatchSet *latch, uint line)
-{
-	switch( mode ) {
-	case BtLockRead:
-		ReadRelease (latch->readwr);
-		break;
-	case BtLockWrite:
-		WriteRelease (latch->readwr);
-		break;
-	case BtLockAccess:
-		ReadRelease (latch->access);
-		break;
-	case BtLockDelete:
-		WriteRelease (latch->access);
-		break;
-	case BtLockParent:
-		WriteRelease (latch->parent);
-		break;
-	case BtLockLink:
-		WriteRelease (latch->link);
-		break;
-	}
-}
-
 //	allocate a new page
-//	return with page latched, but unlocked.
 //	contents is cleared for lvl > 0
 
 int bt_newpage(BtMgr *mgr, BtPageSet *set, BtPage contents)
@@ -1048,39 +826,6 @@ uid page_no;
 
 	set->page->nopromote = 0;
 	return 0;
-}
-
-//  find slot in page for given key at a given level
-
-int bt_findslot (BtPage page, unsigned char *key, uint len)
-{
-uint diff, higher = page->cnt, low = 1, slot;
-uint good = 0;
-
-	//	  make stopper key an infinite fence value
-
-	if( page->right )
-		higher++;
-	else
-		good++;
-
-	//	low is the lowest candidate.
-	//  loop ends when they meet
-
-	//  higher is already
-	//	tested as .ge. the passed key.
-
-	while( diff = higher - low ) {
-		slot = low + ( diff >> 1 );
-		if( keycmp (keyptr(page, slot), key, len) < 0 )
-			low = slot + 1;
-		else
-			higher = slot, good++;
-	}
-
-	//	return zero if key is on right link page
-
-	return good ? higher : 0;
 }
 
 //  find and load page at given level for given key
@@ -1514,97 +1259,6 @@ BtVal *val;
 	bt_unpinlatch (set->latch);
 	return 0;
 }
-
-//	check page for space available,
-//	clean if necessary and return
-//	0 - page needs splitting
-//	>0  new slot value
-
-uint bt_cleanpage(BtMgr *mgr, BtPageSet *set, uint keylen, uint slot, uint vallen)
-{
-uint page_size = mgr->page_size;
-BtPage page = set->page, frame;
-uint cnt = 0, idx = 0;
-uint max = page->cnt;
-uint newslot = max;
-BtKey *key;
-BtVal *val;
-
-	if( !set->page->lvl )
-		page_size <<= mgr->leaf_xtra;
-
-	if( page->min >= (max+2) * sizeof(BtSlot) + sizeof(*page) + keylen + sizeof(BtKey) + vallen + sizeof(BtVal))
-		return slot;
-
-	//	skip cleanup and proceed to split
-	//	if there's not enough garbage
-	//	to bother with.
-
-	if( page->garbage < page_size / 5 )
-		return 0;
-
-	frame = malloc (page_size);
-	memcpy (frame, page, page_size);
-
-	// skip page info and set rest of page to zero
-
-	memset (page+1, 0, page_size - sizeof(*page));
-
-	page->min = page_size;
-	page->garbage = 0;
-	page->act = 0;
-
-	// clean up page first by
-	// removing dead keys
-
-	while( cnt++ < max ) {
-		if( cnt == slot )
-			newslot = idx + 2;
-
-		if( cnt < max || frame->lvl )
-		  if( slotptr(frame,cnt)->dead )
-			continue;
-
-		// copy the value across
-
-		val = valptr(frame, cnt);
-		page->min -= val->len + sizeof(BtVal);
-		memcpy ((unsigned char *)page + page->min, val, val->len + sizeof(BtVal));
-
-		// copy the key across
-
-		key = keyptr(frame, cnt);
-		page->min -= key->len + sizeof(BtKey);
-		memcpy ((unsigned char *)page + page->min, key, key->len + sizeof(BtKey));
-
-		// make a librarian slot
-
-		slotptr(page, ++idx)->off = page->min;
-		slotptr(page, idx)->type = Librarian;
-		slotptr(page, idx)->dead = 1;
-
-		// set up the slot
-
-		slotptr(page, ++idx)->off = page->min;
-		slotptr(page, idx)->type = slotptr(frame, cnt)->type;
-
-		if( !(slotptr(page, idx)->dead = slotptr(frame, cnt)->dead) )
-		  page->act++;
-	}
-
-	page->fence = page->min;
-	page->cnt = idx;
-	free (frame);
-
-	//	see if page has enough space now, or does it need splitting?
-
-	if( page->min >= (idx+2) * sizeof(BtSlot) + sizeof(*page) + keylen + sizeof(BtKey) + vallen + sizeof(BtVal) )
-		return newslot;
-
-	return 0;
-}
-
-// split the root and raise the height of the btree
 
 BTERR bt_splitroot(BtMgr *mgr, BtPageSet *root, BtLatchSet *right)
 {  
