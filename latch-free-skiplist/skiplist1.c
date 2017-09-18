@@ -24,9 +24,6 @@ RESULTING FROM THE USE, MODIFICATION, OR
 REDISTRIBUTION OF THIS SOFTWARE.
 */
 
-// Please see the project home page for documentation
-// code.google.com/p/high-concurrency-btree
-
 #define _FILE_OFFSET_BITS 64
 #define _LARGEFILE64_SOURCE
 
@@ -105,8 +102,8 @@ typedef unsigned int		uint;
 typedef struct {
   union {
 	struct {
-	  volatile unsigned char xcl[1];
-	  volatile unsigned char filler;
+	  volatile uint8_t xcl[1];
+	  volatile uint8_t filler;
 	  volatile ushort waiters[1];
 	} bits[1];
 	uint value[1];
@@ -125,23 +122,40 @@ typedef enum {
 	Delete
 } BtSlotType;
 
+//	key entries for single pages or smaller consecutive page groups
+
 //	the keys on the page are organized into a skiplist
 //	the key value is stored after the skiplist tower
 
 typedef struct {
-	ushort type:3;			// type of slot
-	ushort dead:1;			// set for deleted slot
-	ushort height:4;		// the skiplist tower height
-	ushort size;			// overall key entry allocation size
-	ushort update;			// updated page no for interior keys
-	ushort tower[1];		// tower level zero (next key)
+	uint8_t type:3;		// type of slot
+	uint8_t dead:1;		// set for deleted slot
+	uint8_t height:4;	// the skiplist tower height in bits
+	uint8_t group:8;	// number of pages in the group in bits;
+	ushort size;		// overall key entry allocation size
+	ushort update;		// updated page no for interior keys
+	ushort tower[1];	// tower level zero (next key)
 } BtEntry;
+
+//	key entries for large consecutive page groups
+//	valid for groups of pages larger
+//	than BT_maxpage in size
+
+typedef struct {
+	uint8_t type:3;		// type of slot
+	uint8_t dead:1;		// set for deleted slot
+	uint8_t height:4;	// the skiplist tower height in double bits
+	uint8_t group:8;	// number of pages in the group in bits;
+	ushort size;		// overall key entry allocation size
+	uint update;		// page offset of updated page no (for interior keys)
+	uint tower[1];		// tower level zero (next higher key on page)
+} BtLargeEntry;
 
 //	the key value
 
 typedef struct {
-	unsigned char len[1];	// this can be either 1 or 2 bytes depending on high-order bit
-	unsigned char key[0];	// the key value bytes
+	uint8_t len[1];	// this can be either 1 or 2 bytes depending on high-order bit
+	uint8_t key[0];	// the key value bytes
 } BtKey;
 
 #define BT_maxkey	32767	// maximum number of bytes in a key
@@ -163,26 +177,27 @@ typedef enum {
 
 typedef struct {
 	union {
-		unsigned char base[1];	// byte address for page offsets
+		uint8_t base[1];	// byte address for page offsets
 		struct {
-			ushort max;			// next available page offset (also serves as page version)
-			uint8_t state;		// page state enum
+			uint state:2;	// page state enum (serves as modification mutex on unix)
+			uint max:30;	// next available page offset (also serves as page version)
 		};
-		uint allocation[1];		// all elements above
+		uint allocation[1];	// all elements above
 	};
-	uint8_t lvl, bits;			// level of page, zero = leaf, page size in bits
-	ushort right, left;			// page offsets to find left/right page numbers
-	uint repl[1];				// page offset to find next page number
+	uint8_t lvl, bits;		// level of page, zero = leaf, page size in bits
+	uint right, left;		// page offsets to find left/right page numbers
+	uint repl[1];			// page offset to find next page number
 #ifdef _WIN32
-	SRWLOCK rebuild[1];			// mutex to reorganize page
+	SRWLOCK rebuild[1];		// mutex to reorganize page
 #endif
 } BtPage;
 
 //	Btree Segment table
+//	in units of page size
 
 typedef struct {
-	uint64_t size;					// size of the segment
-	uint64_t offset;				// starting offset of the segment
+	uint offset;			// starting file offset of the segment
+	uint size;				// number of pages in the segment
 } BtSegment;
 
 //	global structure for BTREE
@@ -195,8 +210,8 @@ typedef struct {
 	BtUid leaf_page;				// page number of leftmost leaf
 	BtUid rightleaf;				// page number of rightmost leaf
 	BtUid leafpromote;				// next leaf page to try promotion
-	unsigned char leaf_xtra;		// leaf page size in xtra bits
-	unsigned char page_bits;		// base page size in bits
+	uint8_t leaf_xtra;		// leaf page size in xtra bits
+	uint8_t page_bits;		// base page size in bits
 	MutexLatch promote[1];			// promotion lite latch
 	MutexLatch lock[1];				// allocation area lite latch
 	MutexLatch maps[1];				// segment table mutex
@@ -360,12 +375,12 @@ extern BtDb *bt_open (BtMgr *mgr, BtMgr *main);
 extern BTERR bt_writepage (BtMgr *mgr, BtPage page, uid page_no, uint leaf);
 extern void bt_lockpage(BtLock mode, BtLatchSet *latch, pid_t tid, uint line);
 extern void bt_unlockpage(BtLock mode, BtLatchSet *latch, uint line);
-extern BTERR bt_insertkey (BtMgr *mgr, unsigned char *key, uint len, uint lvl, void *value, uint vallen, BtSlotType type);
-extern BTERR  bt_deletekey (BtMgr *mgr, unsigned char *key, uint len, uint lvl);
+extern BTERR bt_insertkey (BtMgr *mgr, uint8_t *key, uint len, uint lvl, void *value, uint vallen, BtSlotType type);
+extern BTERR  bt_deletekey (BtMgr *mgr, uint8_t *key, uint len, uint lvl);
 
-extern int bt_findkey (BtDb *db, unsigned char *key, uint keylen, unsigned char *value, uint valmax);
+extern int bt_findkey (BtDb *db, uint8_t *key, uint keylen, uint8_t *value, uint valmax);
 
-extern BTERR bt_startkey (BtDb *db, unsigned char *key, uint len);
+extern BTERR bt_startkey (BtDb *db, uint8_t *key, uint len);
 extern BTERR bt_nextkey (BtDb *bt);
 
 extern uint bt_lastkey (BtDb *bt);
@@ -380,7 +395,7 @@ BTERR bt_promote (BtDb *bt);
 
 #define keyptr(page, entry) ((BtKey*)(entry->)
 #define valptr(page, slot) ((BtVal*)(keyptr(page,slot)->key + keyptr(page,slot)->len))
-#define fenceptr(page) ((BtKey*)((unsigned char*)(page) + page->fence))
+#define fenceptr(page) ((BtKey*)((uint8_t*)(page) + page->fence))
 
 pid_t sys_gettid ()
 {
@@ -479,7 +494,7 @@ void bt_close (BtDb *bt)
 void bt_initpage (BtMgr *mgr, BtPage page, uid leaf_page_no, uint lvl)
 {
 BtSlot *node = slotptr(page, 1);
-unsigned char value[BtId];
+uint8_t value[BtId];
 uid page_no;
 BtKey* key;
 BtVal *val;
@@ -681,7 +696,7 @@ mgrlatch:
 
 	mgr->segments = 1;
 	mgr->maxseg = MIN_seg;
-	mgr->pages = calloc (MIN_seg, sizeof(unsigned char *));
+	mgr->pages = calloc (MIN_seg, sizeof(uint8_t *));
 
 	flag = PROT_READ | PROT_WRITE;
 	mgr->pages[0] = mmap (0, (uid)mgr->page_size << SEG_bits, flag, MAP_SHARED, mgr->idx, 0);
@@ -717,7 +732,7 @@ BtDb *bt = malloc (sizeof(*bt));
 //  +1: key2 < key1
 //  as the comparison value
 
-int keycmp (BtKey* key1, unsigned char *key2, uint len2)
+int keycmp (BtKey* key1, uint8_t *key2, uint len2)
 {
 uint len1 = key1->len;
 int ans;
@@ -831,7 +846,7 @@ uid page_no;
 //  find and load page at given level for given key
 //	leave page rd or wr locked as requested
 
-int bt_loadpage (BtMgr *mgr, BtPageSet *set, unsigned char *key, uint len, uint lvl, BtLock lock, pid_t tid)
+int bt_loadpage (BtMgr *mgr, BtPageSet *set, uint8_t *key, uint len, uint lvl, BtLock lock, pid_t tid)
 {
 uid page_no = ROOT_page, prevpage_no = 0;
 uint drill = 0xff, slot;
@@ -993,8 +1008,8 @@ uid *freechain;
 
 BTERR bt_fixfence (BtMgr *mgr, BtPageSet *set, uint lvl)
 {
-unsigned char leftkey[BT_keyarray], rightkey[BT_keyarray];
-unsigned char value[BtId];
+uint8_t leftkey[BT_keyarray], rightkey[BT_keyarray];
+uint8_t value[BtId];
 BtKey* ptr;
 uint idx;
 
@@ -1083,10 +1098,10 @@ uint idx;
 
 BTERR bt_deletepage (BtMgr *mgr, BtPageSet *set, uint lvl)
 {
-unsigned char higherfence[BT_keyarray], lowerfence[BT_keyarray];
+uint8_t higherfence[BT_keyarray], lowerfence[BT_keyarray];
 uint page_size = mgr->page_size, kill;
 BtPageSet right[1], temp[1];
-unsigned char value[BtId];
+uint8_t value[BtId];
 uid page_no, right2;
 BtKey *ptr;
 
@@ -1189,7 +1204,7 @@ BtKey *ptr;
 //  find and delete key on page by marking delete flag bit
 //  if page becomes empty, delete it from the btree
 
-BTERR bt_deletekey (BtMgr *mgr, unsigned char *key, uint len, uint lvl)
+BTERR bt_deletekey (BtMgr *mgr, uint8_t *key, uint len, uint lvl)
 {
 uint slot, idx, found, fence, ptrlen;
 BtPageSet set[1];
@@ -1262,9 +1277,9 @@ BtVal *val;
 
 BTERR bt_splitroot(BtMgr *mgr, BtPageSet *root, BtLatchSet *right)
 {  
-unsigned char leftkey[BT_keyarray];
+uint8_t leftkey[BT_keyarray];
 uint nxt = mgr->page_size;
-unsigned char value[BtId];
+uint8_t value[BtId];
 BtPage frame, page;
 BtPageSet left[1];
 uid left_page_no;
@@ -1304,7 +1319,7 @@ BtVal *val;
 
 	nxt -= BtId + sizeof(BtVal);
 	bt_putid (value, right->page_no);
-	val = (BtVal *)((unsigned char *)root->page + nxt);
+	val = (BtVal *)((uint8_t *)root->page + nxt);
 	memcpy (val->value, value, BtId);
 	val->len = BtId;
 
@@ -1312,7 +1327,7 @@ BtVal *val;
 	root->page->fence = nxt;
 
 	slotptr(root->page, 2)->off = nxt;
-	ptr = (BtKey *)((unsigned char *)root->page + nxt);
+	ptr = (BtKey *)((uint8_t *)root->page + nxt);
 	ptr->len = 2;
 	ptr->key[0] = 0xff;
 	ptr->key[1] = 0xff;
@@ -1321,14 +1336,14 @@ BtVal *val;
 
 	nxt -= BtId + sizeof(BtVal);
 	bt_putid (value, left_page_no);
-	val = (BtVal *)((unsigned char *)root->page + nxt);
+	val = (BtVal *)((uint8_t *)root->page + nxt);
 	memcpy (val->value, value, BtId);
 	val->len = BtId;
 
 	ptr = (BtKey *)leftkey;
 	nxt -= ptr->len + sizeof(BtKey);
 	slotptr(root->page, 1)->off = nxt;
-	memcpy ((unsigned char *)root->page + nxt, leftkey, ptr->len + sizeof(BtKey));
+	memcpy ((uint8_t *)root->page + nxt, leftkey, ptr->len + sizeof(BtKey));
 	
 	root->page->right = 0;
 	root->page->min = nxt;		// reset lowest used offset and key count
@@ -1382,11 +1397,11 @@ uint prev;
 
 		val = valptr(set->page, cnt);
 		frame->min -= val->len + sizeof(BtVal);
-		memcpy ((unsigned char *)frame + frame->min, val, val->len + sizeof(BtVal));
+		memcpy ((uint8_t *)frame + frame->min, val, val->len + sizeof(BtVal));
 
 		key = keyptr(set->page, cnt);
 		frame->min -= key->len + sizeof(BtKey);
-		memcpy ((unsigned char *)frame + frame->min, key, key->len + sizeof(BtKey));
+		memcpy ((uint8_t *)frame + frame->min, key, key->len + sizeof(BtKey));
 
 		//	add librarian slot
 
@@ -1460,11 +1475,11 @@ uint prev;
 			continue;
 		val = valptr(frame, cnt);
 		set->page->min -= val->len + sizeof(BtVal);
-		memcpy ((unsigned char *)set->page + set->page->min, val, val->len + sizeof(BtVal));
+		memcpy ((uint8_t *)set->page + set->page->min, val, val->len + sizeof(BtVal));
 
 		key = keyptr(frame, cnt);
 		set->page->min -= key->len + sizeof(BtKey);
-		memcpy ((unsigned char *)set->page + set->page->min, key, key->len + sizeof(BtKey));
+		memcpy ((uint8_t *)set->page + set->page->min, key, key->len + sizeof(BtKey));
 
 		//	add librarian slot
 
@@ -1494,8 +1509,8 @@ uint prev;
 
 BTERR bt_splitkeys (BtMgr *mgr, BtPageSet *set, BtLatchSet *right)
 {
-unsigned char leftkey[BT_keyarray], rightkey[BT_keyarray];
-unsigned char value[BtId];
+uint8_t leftkey[BT_keyarray], rightkey[BT_keyarray];
+uint8_t value[BtId];
 uint lvl = set->page->lvl;
 BtPageSet temp[1];
 BtPage page;
@@ -1567,7 +1582,7 @@ uid right2;
 //	page must already be checked for
 //	adequate space
 
-BTERR bt_insertslot (BtMgr *mgr, BtPageSet *set, uint slot, unsigned char *key,uint keylen, unsigned char *value, uint vallen, uint type)
+BTERR bt_insertslot (BtMgr *mgr, BtPageSet *set, uint slot, uint8_t *key,uint keylen, uint8_t *value, uint vallen, uint type)
 {
 uint idx, librarian;
 BtSlot *node;
@@ -1584,14 +1599,14 @@ int rate;
 	// copy value onto page
 
 	set->page->min -= vallen + sizeof(BtVal);
-	val = (BtVal*)((unsigned char *)set->page + set->page->min);
+	val = (BtVal*)((uint8_t *)set->page + set->page->min);
 	memcpy (val->value, value, vallen);
 	val->len = vallen;
 
 	// copy key onto page
 
 	set->page->min -= keylen + sizeof(BtKey);
-	ptr = (BtKey*)((unsigned char *)set->page + set->page->min);
+	ptr = (BtKey*)((uint8_t *)set->page + set->page->min);
 	memcpy (ptr->key, key, keylen);
 	ptr->len = keylen;
 	
@@ -1661,7 +1676,7 @@ int rate;
 //  Insert new key into the btree at given level.
 //	either add a new key or update/add an existing one
 
-BTERR bt_insertkey (BtMgr *mgr, unsigned char *key, uint keylen, uint lvl, void *value, uint vallen, BtSlotType type)
+BTERR bt_insertkey (BtMgr *mgr, uint8_t *key, uint keylen, uint lvl, void *value, uint vallen, BtSlotType type)
 {
 uint slot, idx, len, entry;
 BtPageSet set[1];
@@ -1753,12 +1768,12 @@ BtVal *val;
   //  copy key and value onto page and update slot
 
   set->page->min -= vallen + sizeof(BtVal);
-  val = (BtVal*)((unsigned char *)set->page + set->page->min);
+  val = (BtVal*)((uint8_t *)set->page + set->page->min);
   memcpy (val->value, value, vallen);
   val->len = vallen;
 
   set->page->min -= keylen + sizeof(BtKey);
-  ptr = (BtKey*)((unsigned char *)set->page + set->page->min);
+  ptr = (BtKey*)((uint8_t *)set->page + set->page->min);
   memcpy (ptr->key, key, keylen);
   ptr->len = keylen;
 	
@@ -1992,7 +2007,7 @@ BTERR bt_atomicexec(BtMgr *mgr, BtPage source, uint count, pid_t tid)
 {
 uint slot, src, idx, samepage, entry, outidx;
 BtPageSet set[1], prev[1];
-unsigned char value[BtId];
+uint8_t value[BtId];
 BtLatchSet *latch;
 uid right_page_no;
 AtomicTxn *locks;
@@ -2297,7 +2312,7 @@ fprintf(stderr, "Promote page %lld, %d keys\n", page_no, set->page->act);
 //	leaf level and return number of value bytes
 //	or (-1) if not found.
 
-int bt_findkey (BtDb *bt, unsigned char *key, uint keylen, unsigned char *value, uint valmax)
+int bt_findkey (BtDb *bt, uint8_t *key, uint keylen, uint8_t *value, uint valmax)
 {
 int ret = -1, type;
 BtPageSet set[1];
@@ -2607,7 +2622,7 @@ int cmp;
 
 //  start sweep of keys
 
-BTERR bt_startkey (BtDb *bt, unsigned char *key, uint len)
+BTERR bt_startkey (BtDb *bt, uint8_t *key, uint len)
 {
 BtPageSet set[1];
 uint slot;
@@ -2776,8 +2791,8 @@ uint __stdcall index_file (void *arg)
 {
 int line = 0, found = 0, cnt = 0, cachecnt, idx;
 int ch, len = 0, slot, type = 0;
-unsigned char key[BT_maxkey];
-unsigned char buff[65536];
+uint8_t key[BT_maxkey];
+uint8_t buff[65536];
 uint nxt = sizeof(buff);
 ThreadArg *args = arg;
 uint counts[8][2];
