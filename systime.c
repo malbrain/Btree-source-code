@@ -29,19 +29,21 @@ int sum = 0, off;
 			exit(1);
 		}
 
-		sum += map[random() % 262144];
-
-		if (!i)
-		  for (j = 0; j < 262144; j++)
-			if (map[j] )
-				printf("Found idx = %d\n", j);
+		for (j = 0; j < 262144; j++)
+			sum += map[random() % 262144];
 
 		munmap (map, 262144);
 		continue;
 
 	  case 'd':
-		pread (fd, buff, 262144, off);
-		sum += buff[random() % 262144];
+		j = pread (fd, buff, 262144, off);
+		if (j < 262144) {
+			printf("pread failed, errno = %d offset = %x len = %d\n", errno, off, j);
+			exit(1);
+		}
+
+		for(j = 0; j < 262144; j++)
+			sum += buff[random() % 262144];
 		continue;
 	  }
 	}
