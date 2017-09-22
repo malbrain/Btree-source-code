@@ -10,24 +10,26 @@ int fd = open (argv[2], O_CREAT | O_RDWR, 0666);
 int cnt = atoi(argv[3]), i, j;
 int cell = atoi(argv[4]);
 char *buff, *map;
-int sum = 0;
+int sum = 0, off;
 
-	buff = calloc (262144, 1);
+	buff = calloc (1024 * 1024, 1);
 	buff[cell] = 1;
 
-	write (fd, buff, 262144);
+	write (fd, buff, 1024 * 1024);
 
-	for (i = 0; i < cnt; i++)
+	for (i = 0; i < cnt; i++) {
+	  off = random() % (1024 * 1024 - 262144) & ~0xfff;
+
 	  switch(argv[1][0]) {
 	  case 'm':
-		map = mmap (NULL, 262144, PROT_READ, MAP_SHARED, fd, 0);
+		map = mmap (NULL, 262144, PROT_READ, MAP_SHARED, fd, off);
 
 		if (map == MAP_FAILED) {
-			printf("mmap failed, errno = %d\n", errno);
+			printf("mmap failed, errno = %d offset = %x\n", errno, off);
 			exit(1);
 		}
 
-		sum += buff[random() % 262144];
+		sum += map[random() % 262144];
 
 		if (!i)
 		  for (j = 0; j < 262144; j++)
@@ -38,10 +40,11 @@ int sum = 0;
 		continue;
 
 	  case 'd':
-		pread (fd, buff, 262144, 0);
-		sum += buff[rand() % 262144];
+		pread (fd, buff, 262144, off);
+		sum += buff[random() % 262144];
 		continue;
 	  }
+	}
 
 	printf("sum %d\n", sum);
 }
