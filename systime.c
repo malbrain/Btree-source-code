@@ -7,8 +7,15 @@
 #include <inttypes.h>
 #include <sys/mman.h>
 
-unsigned int myrandom() {
-	return rand() * RAND_MAX + rand();
+uint64_t myrandom() {
+uint64_t ans = 0;
+
+	ans |= rand() % 32768;
+	ans <<= 15;
+	ans |= rand() % 32768;
+	ans <<= 15;
+	ans |= rand() % 32768;
+	return ans;
 }
 
 int main (int argc, char **argv) {
@@ -28,12 +35,14 @@ int sum = 0;
 		pwrite (fd, buff, 1024 * 1024, off), off += 1024 * 1024;
 
 	for (i = 0; i < cnt; i++) {
-	  off = myrandom() % (size - 262144) & ~0xfff;
+	  off = myrandom() % (size - 262144) & ~0xfffLL;
 
 	  switch(argv[1][0]) {
 	  case 'c':
-		if (!i)
+		if (!i) {
 			map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+			madvise(map, size, MADV_RANDOM);
+		}
 
 		if (map == MAP_FAILED) {
 			printf("core mmap failed, errno = %d\n", errno);
@@ -67,7 +76,7 @@ int sum = 0;
 			exit(1);
 		}
 
-		for(j = 0; j < 262144/32; j++)
+		for(j = 0; j < 32; j++)
 			sum += buff[myrandom() % 262144];
 		continue;
 	  }
