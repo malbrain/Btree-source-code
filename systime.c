@@ -20,8 +20,9 @@ int sum = 0, off;
 	buff = calloc (size/1024, 1);
 	buff[cell] = 1;
 
-	for (i=0; i < 1024; i++)
-		write (fd, buff, size/1024);
+	if (lseek(fd, 0L, 2) < size)
+	  for (i=0; i < 1024; i++)
+		pwrite (fd, buff, size/1024, i * 1024 * 1024);
 
 	for (i = 0; i < cnt; i++) {
 	  off = myrandom() % (size - 262144) & ~0xfff;
