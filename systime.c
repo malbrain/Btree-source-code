@@ -1,9 +1,11 @@
 #include <sys/mman.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
+#include <inttypes.h>
 
 unsigned int myrandom() {
 	return rand() * RAND_MAX + rand();
@@ -11,18 +13,19 @@ unsigned int myrandom() {
 
 int main (int argc, char **argv) {
 int fd = open (argv[2], O_CREAT | O_RDWR, 0666);
-int size = 1024 * 1024 * 1024;
+uint64_t size = 1024 * 1024 * 1024, off;
 int cnt = atoi(argv[3]), i, j;
-int cell = atoi(argv[4]);
+int scale = atoi(argv[4]);
 char *buff, *map;
-int sum = 0, off;
+int sum = 0;
 
-	buff = calloc (size/1024, 1);
-	buff[cell] = 1;
+	off = 0;
+	size *= scale;
+	buff = calloc (1024, 1024);
 
 	if (lseek(fd, 0L, 2) < size)
-	  for (i=0; i < 1024; i++)
-		pwrite (fd, buff, size/1024, i * 1024 * 1024);
+	  while (off < size)
+		pwrite (fd, buff, 1024 * 1024, off), off += 1024 * 1024;
 
 	for (i = 0; i < cnt; i++) {
 	  off = myrandom() % (size - 262144) & ~0xfff;
@@ -31,6 +34,11 @@ int sum = 0, off;
 	  case 'c':
 		if (!i)
 			map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+
+		if (map == MAP_FAILED) {
+			printf("core mmap failed, errno = %d\n", errno);
+			exit(1);
+		}
 
 		for (j = 0; j < 32; j++)
 			sum += map[off + myrandom() % 262144];
@@ -42,7 +50,7 @@ int sum = 0, off;
 		madvise(map, 262144, MADV_RANDOM);
 
 		if (map == MAP_FAILED) {
-			printf("mmap failed, errno = %d offset = %x\n", errno, off);
+			printf("mmap failed, errno = %d offset = %" PRIx64 "\n", errno, off);
 			exit(1);
 		}
 
@@ -55,7 +63,7 @@ int sum = 0, off;
 	  case 'd':
 		j = pread (fd, buff, 262144, off);
 		if (j < 262144) {
-			printf("pread failed, errno = %d offset = %x len = %d\n", errno, off, j);
+			printf("pread failed, errno = %d offset = %" PRIx64 "len = %d\n", errno, off, j);
 			exit(1);
 		}
 
