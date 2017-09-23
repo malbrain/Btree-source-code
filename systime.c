@@ -18,6 +18,15 @@ uint64_t ans = 0;
 	return ans;
 }
 
+char usage[] = "usage: %s type filename reps gigs\n"
+	"	where type is:\n"
+	"		m - per page (262144) memory map\n"
+	"		c - make full file memory map\n"
+	"		d - use page disk read/writes\n"
+	"	reps is the number of random pages to process\n"
+	"	filename is the name of the test disk file\n"
+	"	gigs is the size of the test file in gigabytes\n\n";
+	
 int main (int argc, char **argv) {
 int fd = open (argv[2], O_CREAT | O_RDWR, 0666);
 uint64_t size = 1024LL * 1024LL * 1024LL, off;
@@ -25,6 +34,11 @@ int cnt = atoi(argv[3]), i, j;
 int scale = atoi(argv[4]);
 char *buff, *map;
 int sum = 0;
+
+	if (argc < 2) {
+		fprintf (stderr, usage, argv[0]);
+		exit(1);
+	}
 
 	off = 0;
 	size *= scale;
