@@ -1,4 +1,3 @@
-#include <sys/mman.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -6,6 +5,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <sys/mman.h>
 
 unsigned int myrandom() {
 	return rand() * RAND_MAX + rand();
@@ -13,7 +13,7 @@ unsigned int myrandom() {
 
 int main (int argc, char **argv) {
 int fd = open (argv[2], O_CREAT | O_RDWR, 0666);
-uint64_t size = 1024 * 1024 * 1024, off;
+uint64_t size = 1024LL * 1024LL * 1024LL, off;
 int cnt = atoi(argv[3]), i, j;
 int scale = atoi(argv[4]);
 char *buff, *map;
