@@ -41,7 +41,6 @@ int sum = 0;
 	  case 'c':
 		if (!i) {
 			map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
-			madvise(map, size, MADV_RANDOM);
 		}
 
 		if (map == MAP_FAILED) {
@@ -56,7 +55,6 @@ int sum = 0;
 
 	  case 'm':
 		map = mmap (NULL, 262144, PROT_READ, MAP_SHARED, fd, off);
-		madvise(map, 262144, MADV_RANDOM);
 
 		if (map == MAP_FAILED) {
 			printf("mmap failed, errno = %d offset = %" PRIx64 "\n", errno, off);
