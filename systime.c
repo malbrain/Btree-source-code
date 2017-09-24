@@ -24,9 +24,9 @@ uint64_t ans = 0;
 
 char usage[] = "usage: %s type filename reps megs [upd]\n"
 	"	where type is:\n"
-	"		c - use full file memory map\n"
+	"		m - use full file memory map\n"
 	"		d - use disk read/writes for leaves\n"
-	"	reps is the number of random pages to process\n"
+	"	reps is the number of random pages to simulate\n"
 	"	filename is the name of the test disk file\n"
 	"	megs is the size of the test file in megabytes\n"
 	"	upd is number of buffered leaf updates\n\n";
@@ -53,7 +53,7 @@ int sum = 0;
 	  while (off < size)
 		pwrite (fd, buff, 1024 * 1024, off), off += 1024 * 1024;
 
-	if(argv[1][0] == 'c') {
+	if(argv[1][0] == 'm') {
 		map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
 
 		if (map == MAP_FAILED) {
@@ -75,7 +75,7 @@ int sum = 0;
 		}
 
 		switch(argv[1][0]) {
-		case 'c':
+		case 'm':
 			// simulate leaf level disk operation
 
 			madvise(map + off, 262144, MADV_WILLNEED);
