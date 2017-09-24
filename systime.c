@@ -109,7 +109,7 @@ int sum = 0;
 		exit(1);
 	}
 
-	//	simulate interior nodes in memory
+	//	simulate interior nodes with in-memory array
 
 	off = 0;
 	size *= scale;
@@ -120,7 +120,7 @@ int sum = 0;
 
 	switch(argv[1][0]) {
 	  case 'm':
-		map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+		map = mmap (NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
 		if (map == MAP_FAILED) {
 			printf("mmap failed, errno = %d\n", errno);
@@ -129,7 +129,7 @@ int sum = 0;
 	  case 'd':
 		break;
 	  default:
-		printf("invalid simulation time: %c\n", argv[1][0]);
+		printf("invalid simulation type: %c\n", argv[1][0]);
 		exit(1);
 
 	}
@@ -141,25 +141,25 @@ int sum = 0;
 	for (i = 0; i < cnt; i++) {
 		off = myrandom(size - 262144) & ~0xfffLL;
 
-		// simulate in-memory operation on interior or leaf node
+		// simulate in-memory operation on interior node buffer
 	
 		if (i % upd) {
 	  	  for (j = 0; j < 18; j++)
-			sum += base[myrandom(262144)];
+			base[off + myrandom(262144)] += 1;
 
 	  	  continue;
 		}
 
+		// simulate leaf level disk operation
+
 		switch(argv[1][0]) {
 		case 'm':
-			// simulate leaf level disk operation
-
 			madvise(map + off, 262144, MADV_WILLNEED);
 
 			for(k = 0; k < upd; k++)
 			 for(j = 0; j < 18; j++) {
 			  uint32_t x = myrandom(262144);
-			  base[x] = map[off + x];
+			  map[off + x] = base[off + x];
 			 }
 
 			madvise(map + off, 262144, MADV_DONTNEED);
