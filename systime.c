@@ -44,6 +44,7 @@ double ans = 0;
 #include <unistd.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
+#include <sys/time.h>
 
 double getCpuTime(int type)
 {
@@ -98,7 +99,7 @@ uint64_t size = 1024LL * 1024LL, off;
 int cnt = atoi(argv[3]), i, j, k;
 int scale = atoi(argv[4]);
 int upd = atoi(argv[5]);
-char *buff, *map;
+char *base, *map;
 double start[3];
 float elapsed;
 int sum = 0;
@@ -112,18 +113,25 @@ int sum = 0;
 
 	off = 0;
 	size *= scale;
-	buff = malloc (size);
+	base = malloc (size);
 
 	if (lseek(fd, 0L, 2) < size)
-		pwrite (fd, buff, size, 0); 
+		pwrite (fd, base, size, 0); 
 
-	if(argv[1][0] == 'm') {
+	switch(argv[1][0]) {
+	  case 'm':
 		map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
 
 		if (map == MAP_FAILED) {
 			printf("mmap failed, errno = %d\n", errno);
 			exit(1);
 		}
+	  case 'd':
+		break;
+	  default:
+		printf("invalid simulation time: %c\n", argv[1][0]);
+		exit(1);
+
 	}
 
 	start[0] = getCpuTime(0);
@@ -137,7 +145,7 @@ int sum = 0;
 	
 		if (i % upd) {
 	  	  for (j = 0; j < 18; j++)
-			sum += buff[myrandom(262144)];
+			sum += base[myrandom(262144)];
 
 	  	  continue;
 		}
@@ -149,14 +157,16 @@ int sum = 0;
 			madvise(map + off, 262144, MADV_WILLNEED);
 
 			for(k = 0; k < upd; k++)
-			 for(j = 0; j < 18; j++)
-			  sum += map[off + myrandom(262144)];
+			 for(j = 0; j < 18; j++) {
+			  uint x = myrandom(262144);
+			  base[x] = map[off + x];
+			 }
 
 			madvise(map + off, 262144, MADV_DONTNEED);
 			break;
 
 		case 'd':
-			j = pread (fd, buff, 262144, off);
+			j = pread (fd, base, 262144, off);
 
 			if (j < 262144) {
 			  printf("pread failed, errno = %d offset = %" PRIx64 "len = %d\n", errno, off, j);
@@ -165,7 +175,14 @@ int sum = 0;
 
 			for(k = 0; k < upd; k++)
 			 for(j = 0; j < 18; j++)
-			  sum += buff[myrandom(262144)];
+			  base[myrandom(262144)] += upd;
+
+			j = pwrite (fd, base, 262144, off);
+
+			if (j < 262144) {
+			  printf("pread failed, errno = %d offset = %" PRIx64 "len = %d\n", errno, off, j);
+			  exit(1);
+			}
 
 			continue;
 		}
