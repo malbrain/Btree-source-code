@@ -66,23 +66,23 @@ int sum = 0;
 		off = myrandom(size - 262144) & ~0xfffLL;
 
 		// simulate in-memory operation on interior or leaf node
-
+	
 		if (i % upd) {
-		  for (j = 0; j < 18; j++)
-			sum += map[off + myrandom(262144)];
+	  	  for (j = 0; j < 18; j++)
+			sum += buff[myrandom(262144)];
 
-		  continue;
+	  	  continue;
 		}
-
-		// simulate leaf level disk operation
 
 		switch(argv[1][0]) {
 		case 'c':
+			// simulate leaf level disk operation
+
 			madvise(map + off, 262144, MADV_WILLNEED);
 
 			for(k = 0; k < upd; k++)
 			 for(j = 0; j < 18; j++)
-			  sum += buff[myrandom(262144)];
+			  sum += map[off + myrandom(262144)];
 
 			madvise(map + off, 262144, MADV_DONTNEED);
 			break;
