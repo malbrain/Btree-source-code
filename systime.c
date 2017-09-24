@@ -158,7 +158,7 @@ int sum = 0;
 
 			for(k = 0; k < upd; k++)
 			 for(j = 0; j < 18; j++) {
-			  uint x = myrandom(262144);
+			  uint32_t x = myrandom(262144);
 			  base[x] = map[off + x];
 			 }
 
