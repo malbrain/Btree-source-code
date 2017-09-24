@@ -45,13 +45,14 @@ int sum = 0;
 		exit(1);
 	}
 
+	//	simulate interior nodes in memory
+
 	off = 0;
 	size *= scale;
-	buff = calloc (1024, 1024);
+	buff = malloc (size);
 
 	if (lseek(fd, 0L, 2) < size)
-	  while (off < size)
-		pwrite (fd, buff, 1024 * 1024, off), off += 1024 * 1024;
+		pwrite (fd, buff, size, 0); 
 
 	if(argv[1][0] == 'm') {
 		map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
