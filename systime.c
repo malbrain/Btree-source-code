@@ -22,18 +22,17 @@ uint64_t ans = 0;
 	return ans % modulo;
 }
 
-char usage[] = "usage: %s type filename reps gigs [mem]\n"
+char usage[] = "usage: %s type filename reps megs [mem]\n"
 	"	where type is:\n"
-	"		m - per page (262144) memory map\n"
-	"		c - make full file memory map\n"
-	"		d - use page disk read/writes\n"
+	"		c - use full file memory map\n"
+	"		d - use disk read/writes for leaves\n"
 	"	reps is the number of random pages to process\n"
 	"	filename is the name of the test disk file\n"
-	"	gigs is the size of the test file in gigabytes\n"
-	"	mem is the optional limit of core in gigabytes\n\n";
+	"	megs is the size of the test file in megabytes\n"
+	"	mem is the limit of core used in megabytes\n\n";
 	
 int main (int argc, char **argv) {
-uint64_t size = 1024LL * 1024LL * 1024LL, off, core = 0;
+uint64_t size = 1024LL * 1024LL, off, core = 0;
 int fd = open (argv[2], O_CREAT | O_RDWR, 0666);
 int cnt = atoi(argv[3]), i, j, k;
 int scale = atoi(argv[4]);
@@ -46,7 +45,7 @@ int sum = 0;
 	}
 
 	if (argc > 5)
-		core = (uint64_t)atoi(argv[5]) * 1024LL * 1024LL * 1024LL;
+		core = (uint64_t)atoi(argv[5]) * 1024LL * 1024LL;
 
 	off = 0;
 	size *= scale;
@@ -62,6 +61,9 @@ int sum = 0;
 		printf("core mmap failed, errno = %d\n", errno);
 		exit(1);
 	}
+
+	madvise(map, core, MADV_WILLNEED);
+	madvise(map + core, size - core, MADV_DONTNEED);
 
 	for (i = 0; i < cnt; i++) {
 		off = myrandom(size - 262144) & ~0xfffLL;
