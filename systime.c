@@ -7,15 +7,19 @@
 #include <inttypes.h>
 #include <sys/mman.h>
 
-uint64_t myrandom() {
+uint64_t myrandom(uint64_t modulo) {
 uint64_t ans = 0;
 
 	ans |= rand() % 32768;
 	ans <<= 15;
 	ans |= rand() % 32768;
-	ans <<= 15;
-	ans |= rand() % 32768;
-	return ans;
+
+	if (modulo >> 30) {
+		ans <<= 15;
+		ans |= rand() % 32768;
+	}
+
+	return ans % modulo;
 }
 
 char usage[] = "usage: %s type filename reps gigs [mem]\n"
@@ -31,7 +35,7 @@ char usage[] = "usage: %s type filename reps gigs [mem]\n"
 int main (int argc, char **argv) {
 uint64_t size = 1024LL * 1024LL * 1024LL, off, core = 0;
 int fd = open (argv[2], O_CREAT | O_RDWR, 0666);
-int cnt = atoi(argv[3]), i, j;
+int cnt = atoi(argv[3]), i, j, k;
 int scale = atoi(argv[4]);
 char *buff, *map;
 int sum = 0;
@@ -52,53 +56,52 @@ int sum = 0;
 	  while (off < size)
 		pwrite (fd, buff, 1024 * 1024, off), off += 1024 * 1024;
 
+	map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+
+	if (map == MAP_FAILED) {
+		printf("core mmap failed, errno = %d\n", errno);
+		exit(1);
+	}
+
 	for (i = 0; i < cnt; i++) {
-	  off = myrandom() % (size - 262144) & ~0xfffLL;
+		off = myrandom(size - 262144) & ~0xfffLL;
 
-	  switch(argv[1][0]) {
-	  case 'c':
-		if (!i)
-			map = mmap (NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+		// simulate in-memory operation on interior or leaf node
 
-		if (map == MAP_FAILED) {
-			printf("core mmap failed, errno = %d\n", errno);
-			exit(1);
+		if (off < core) {
+		  for (j = 0; j < 32; j++)
+			sum += map[off + myrandom(262144)];
+
+		  continue;
 		}
 
-		for (j = 0; j < 32; j++)
-			sum += map[off + myrandom() % 262144];
+		// simulate leaf level on-disk operation
 
-		if (core)
-		  if (off >= core)
+		switch(argv[1][0]) {
+		case 'c':
+			madvise(map + off, 262144, MADV_WILLNEED);
+
+			for(k = 0; k < 400; k++)
+			 for(j = 0; j < 32; j++)
+			  sum += buff[myrandom(262144)];
+
 			madvise(map + off, 262144, MADV_DONTNEED);
+			break;
 
-		continue;
+		case 'd':
+			j = pread (fd, buff, 262144, off);
 
-	  case 'm':
-		map = mmap (NULL, 262144, PROT_READ, MAP_SHARED, fd, off);
+			if (j < 262144) {
+			  printf("pread failed, errno = %d offset = %" PRIx64 "len = %d\n", errno, off, j);
+			  exit(1);
+			}
 
-		if (map == MAP_FAILED) {
-			printf("mmap failed, errno = %d offset = %" PRIx64 "\n", errno, off);
-			exit(1);
+			for(k = 0; k < 400; k++)
+			 for(j = 0; j < 32; j++)
+			  sum += buff[myrandom(262144)];
+
+			continue;
 		}
-
-		for (j = 0; j < 32; j++)
-			sum += map[myrandom() % 262144];
-
-		munmap (map, 262144);
-		continue;
-
-	  case 'd':
-		j = pread (fd, buff, 262144, off);
-		if (j < 262144) {
-			printf("pread failed, errno = %d offset = %" PRIx64 "len = %d\n", errno, off, j);
-			exit(1);
-		}
-
-		for(j = 0; j < 32; j++)
-			sum += buff[myrandom() % 262144];
-		continue;
-	  }
 	}
 
 	printf("sum %d\n", sum);
