@@ -194,5 +194,6 @@ int sum = 0;
 	fprintf(stderr, " user %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
 	elapsed = getCpuTime(2) - start[2];
 	fprintf(stderr, " sys  %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
+
 	return 0;
 }
