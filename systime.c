@@ -84,6 +84,19 @@ uint64_t ans = 0;
 	return ans % modulo;
 }
 
+int towerHeight(uint32_t range) {
+uint32_t value = myrandom(range);
+int height = 1;
+
+	while(range >>= 1)
+	  if(value < range)
+		height++;
+	  else
+		break;
+
+	return height;
+}
+
 char usage[] = "usage: %s type filename reps megs [upd]\n"
 	"	where type is:\n"
 	"		m - use full file memory map\n"
@@ -102,7 +115,7 @@ int upd = atoi(argv[5]);
 char *base, *map;
 double start[3];
 float elapsed;
-int sum = 0;
+int height;
 
 	if (argc < 2) {
 		fprintf (stderr, usage, argv[0]);
@@ -140,11 +153,13 @@ int sum = 0;
 
 	for (i = 0; i < cnt; i++) {
 		off = myrandom(size - 262144) & ~0xfffLL;
+		height = towerHeight(262144);
+
 
 		// simulate in-memory operation on interior node buffer
 	
 		if (i % upd) {
-	  	  for (j = 0; j < 18; j++)
+	  	  for (j = 0; j < height; j++)
 			base[off + myrandom(262144)] += 1;
 
 	  	  continue;
@@ -157,7 +172,7 @@ int sum = 0;
 			madvise(map + off, 262144, MADV_WILLNEED);
 
 			for(k = 0; k < upd; k++)
-			 for(j = 0; j < 18; j++) {
+			 for(j = 0; j < height; j++) {
 			  uint32_t x = myrandom(262144);
 			  map[off + x] = base[off + x];
 			 }
@@ -169,18 +184,18 @@ int sum = 0;
 			j = pread (fd, base, 262144, off);
 
 			if (j < 262144) {
-			  printf("pread failed, errno = %d offset = %" PRIx64 "len = %d\n", errno, off, j);
+			  printf("pread failed, errno = %d offset = %" PRIx64 " len = %d\n", errno, off, j);
 			  exit(1);
 			}
 
 			for(k = 0; k < upd; k++)
-			 for(j = 0; j < 18; j++)
+			 for(j = 0; j < height; j++)
 			  base[myrandom(262144)] += upd;
 
 			j = pwrite (fd, base, 262144, off);
 
 			if (j < 262144) {
-			  printf("pread failed, errno = %d offset = %" PRIx64 "len = %d\n", errno, off, j);
+			  printf("pread failed, errno = %d offset = %" PRIx64 " len = %d\n", errno, off, j);
 			  exit(1);
 			}
 
