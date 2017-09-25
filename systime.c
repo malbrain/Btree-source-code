@@ -139,7 +139,7 @@ int height;
 
 	if (lseek(fd, 0L, 2) < 2 * size)
 	  while (off < 2 * size)
-		pwrite (fd, page, 262144, off); 
+		pwrite (fd, page, 262144, off), off += 262144; 
 
 	switch(argv[1][0]) {
 	  case 'm':
