@@ -112,6 +112,7 @@ uint64_t size = 1024LL * 1024LL, off;
 int cnt = atoi(argv[3]), i, j, k;
 int scale = atoi(argv[4]);
 int upd = atoi(argv[5]);
+char page[262144];
 char *base, *map;
 double start[3];
 float elapsed;
@@ -122,29 +123,42 @@ int height;
 		exit(1);
 	}
 
-	//	simulate interior nodes with in-memory array
+	//	store interior nodes in first segment
 
 	off = 0;
 	size *= scale;
-	base = malloc (size);
 
 	if (lseek(fd, 0L, 2) < size)
-		pwrite (fd, base, size, 0); 
+	  while(off < size)
+		pwrite (fd, page, 262144, off), off += 262144; 
+
+	base = mmap (NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+	off = size;
+
+	//	store leaf nodes in second segment
+
+	if (lseek(fd, 0L, 2) < 2 * size)
+	  while (off < 2 * size)
+		pwrite (fd, page, 262144, off); 
 
 	switch(argv[1][0]) {
 	  case 'm':
-		map = mmap (NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		map = mmap (NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, size);
 
 		if (map == MAP_FAILED) {
 			printf("mmap failed, errno = %d\n", errno);
 			exit(1);
 		}
+
+		break;
+
 	  case 'd':
 		break;
-	  default:
-		printf("invalid simulation type: %c\n", argv[1][0]);
-		exit(1);
 
+	  default:
+		printf("invalid simulation type: %c\n\n", argv[1][0]);
+		fprintf (stderr, usage, argv[0]);
+		exit(1);
 	}
 
 	start[0] = getCpuTime(0);
@@ -156,7 +170,7 @@ int height;
 		height = towerHeight(262144);
 
 
-		// simulate in-memory operation on interior node buffer
+		// simulate operation on interior node
 	
 		if (i % upd) {
 	  	  for (j = 0; j < height; j++)
@@ -184,7 +198,7 @@ int height;
 			break;
 
 		case 'd':
-			j = pread (fd, base, 262144, off);
+			j = pread (fd, page, 262144, off);
 
 			if (j < 262144) {
 			  printf("pread failed, errno = %d offset = %" PRIx64 " len = %d\n", errno, off, j);
@@ -194,14 +208,16 @@ int height;
 			for(k = 0; k < upd; k++) {
 			 height = towerHeight(262144);
 
-			 for(j = 0; j < height; j++)
-			  base[myrandom(262144)] += upd;
+			 for(j = 0; j < height; j++) {
+			  uint32_t x = myrandom(262144);
+			  page[x] = base[off+ x];
+			 }
 			}
 
-			j = pwrite (fd, base, 262144, off);
+			j = pwrite (fd, page, 262144, off);
 
 			if (j < 262144) {
-			  printf("pread failed, errno = %d offset = %" PRIx64 " len = %d\n", errno, off, j);
+			  printf("pwrite failed, errno = %d offset = %" PRIx64 " len = %d\n", errno, off, j);
 			  exit(1);
 			}
 
