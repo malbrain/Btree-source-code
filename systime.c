@@ -171,11 +171,14 @@ int height;
 		case 'm':
 			madvise(map + off, 262144, MADV_WILLNEED);
 
-			for(k = 0; k < upd; k++)
+			for(k = 0; k < upd; k++) {
+			 height = towerHeight(262144);
+
 			 for(j = 0; j < height; j++) {
 			  uint32_t x = myrandom(262144);
 			  map[off + x] = base[off + x];
 			 }
+			}
 
 			madvise(map + off, 262144, MADV_DONTNEED);
 			break;
@@ -188,9 +191,12 @@ int height;
 			  exit(1);
 			}
 
-			for(k = 0; k < upd; k++)
+			for(k = 0; k < upd; k++) {
+			 height = towerHeight(262144);
+
 			 for(j = 0; j < height; j++)
 			  base[myrandom(262144)] += upd;
+			}
 
 			j = pwrite (fd, base, 262144, off);
 
