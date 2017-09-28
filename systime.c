@@ -109,9 +109,9 @@ typedef struct {
 } ThreadArg;
 
 #ifndef _WIN32
-void *execround (void *vals) {
+void *execthrd (void *vals) {
 #else
-uint32_t __stdcall execround (void *vals) {
+uint32_t __stdcall execthrd (void *vals) {
 #endif
 ThreadArg *args = vals;
 int height, i, j, k;
@@ -278,10 +278,10 @@ int height;
 		args[idx].cnt = cnt;
 		args[idx].fd = fd;
 #ifndef _WIN32
-		if( (err = pthread_create (threads + idx, NULL, execround, args + idx)) )
+		if( (err = pthread_create (threads + idx, NULL, execthrd, args + idx)) )
 			fprintf(stderr, "Error creating thread %d\n", err);
 #else
-		threads[idx] = (HANDLE)_beginthreadex(NULL, 65536, execround, args + idx, 0, NULL);
+		threads[idx] = (HANDLE)_beginthreadex(NULL, 65536, execthrd, args + idx, 0, NULL);
 #endif
 	}
 
