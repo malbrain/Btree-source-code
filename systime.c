@@ -73,23 +73,23 @@ struct timeval tv[1];
 }
 #endif
 
-uint64_t myrandom(uint64_t modulo) {
+uint64_t myrandom(uint32_t *seed, uint64_t modulo) {
 uint64_t ans = 0;
 
-	ans |= rand() % 32768;
+	ans |= rand_r(seed) % 32768;
 	ans <<= 15;
-	ans |= rand() % 32768;
+	ans |= rand_r(seed) % 32768;
 
 	if (modulo >> 30) {
 		ans <<= 15;
-		ans |= rand() % 32768;
+		ans |= rand_r(seed) % 32768;
 	}
 
 	return ans % modulo;
 }
 
-int towerHeight(uint32_t range) {
-uint32_t value = myrandom(range);
+int towerHeight(uint32_t *seed, uint32_t range) {
+uint32_t value = myrandom(seed, range);
 int height = 1;
 
 	while(range >>= 1)
@@ -104,6 +104,7 @@ int height = 1;
 typedef struct {
 	int fd, idx, cnt, upd;
 	char *base, *map, type;
+	uint32_t seed[1];
 	uint64_t size;
 } ThreadArg;
 
@@ -120,14 +121,14 @@ off_t off;
 	page = malloc(262144);
 
 	for (i = 0; i < args->cnt; i++) {
-		off = myrandom(args->size - 262144) & ~0xfffLL;
-		height = towerHeight(262144);
+		off = myrandom(args->seed, args->size - 262144) & ~0xfffLL;
+		height = towerHeight(args->seed, 262144);
 
 		// simulate operation on interior node
 	
 		if (i % args->upd) {
 	  	  for (j = 0; j < height; j++)
-			args->base[off + myrandom(262144)] += 1;
+			args->base[off + myrandom(args->seed, 262144)] += 1;
 
 	  	  continue;
 		}
@@ -139,10 +140,10 @@ off_t off;
 			madvise(args->map + off, 262144, MADV_WILLNEED);
 
 			for(k = 0; k < args->upd; k++) {
-			 height = towerHeight(262144);
+			 height = towerHeight(args->seed, 262144);
 
 			 for(j = 0; j < height; j++) {
-			  uint32_t x = myrandom(262144);
+			  uint32_t x = myrandom(args->seed, 262144);
 			  args->map[off + x] = args->base[off + x];
 			 }
 			}
@@ -159,10 +160,10 @@ off_t off;
 			}
 
 			for(k = 0; k < args->upd; k++) {
-			 height = towerHeight(262144);
+			 height = towerHeight(args->seed, 262144);
 
 			 for(j = 0; j < height; j++) {
-			  uint32_t x = myrandom(262144);
+			  uint32_t x = myrandom(args->seed, 262144);
 			  page[x] = args->base[off+ x];
 			 }
 			}
@@ -253,6 +254,10 @@ int height;
 		exit(1);
 	}
 
+	start[0] = getCpuTime(0);
+	start[1] = getCpuTime(1);
+	start[2] = getCpuTime(2);
+
 #ifndef _WIN32
 	threads = malloc (nthrds * sizeof(pthread_t));
 #else
@@ -264,6 +269,7 @@ int height;
 
 	for( idx = 0; idx < nthrds; idx++ ) {
 		args[idx].type = argv[1][0];
+		args[idx].seed[0] = idx;
 		args[idx].size = size;
 		args[idx].base = base;
 		args[idx].map = map;
@@ -291,10 +297,6 @@ int height;
 		CloseHandle(threads[idx]);
 
 #endif
-	start[0] = getCpuTime(0);
-	start[1] = getCpuTime(1);
-	start[2] = getCpuTime(2);
-
 	elapsed = getCpuTime(0) - start[0];
 	fprintf(stderr, " real %dm%.3fs\n", (int)(elapsed/60), elapsed - (int)(elapsed/60)*60);
 	elapsed = getCpuTime(1) - start[1];
