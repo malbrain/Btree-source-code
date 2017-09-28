@@ -5,6 +5,10 @@
 #include <errno.h>
 #include <inttypes.h>
 
+#ifndef _WIN32
+#include <pthread.h>
+#endif
+
 #ifdef _WIN32
 double getCpuTime(int type)
 {
@@ -173,6 +177,8 @@ off_t off;
 			continue;
 		}
 	}
+
+	return NULL;
 }
 
 char usage[] = "usage: %s type filename reps megs upd thrds\n"
@@ -266,7 +272,7 @@ int height;
 		args[idx].cnt = cnt;
 		args[idx].fd = fd;
 #ifndef _WIN32
-		if( err = pthread_create (threads + idx, NULL, execround, args + idx) )
+		if( (err = pthread_create (threads + idx, NULL, execround, args + idx)) )
 			fprintf(stderr, "Error creating thread %d\n", err);
 #else
 		threads[idx] = (HANDLE)_beginthreadex(NULL, 65536, execround, args + idx, 0, NULL);
@@ -276,12 +282,12 @@ int height;
 	// 	wait for termination
 
 #ifndef _WIN32
-	for( idx = 0; idx < cnt; idx++ )
+	for( idx = 0; idx < nthrds; idx++ )
 		pthread_join (threads[idx], NULL);
 #else
-	WaitForMultipleObjects (cnt, threads, TRUE, INFINITE);
+	WaitForMultipleObjects (nthrds, threads, TRUE, INFINITE);
 
-	for( idx = 0; idx < cnt; idx++ )
+	for( idx = 0; idx < nthrds; idx++ )
 		CloseHandle(threads[idx]);
 
 #endif
