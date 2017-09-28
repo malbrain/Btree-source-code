@@ -193,12 +193,9 @@ char usage[] = "usage: %s type filename reps megs upd thrds\n"
 	"	thrds is the number of threads to fire\n\n";
 	
 int main (int argc, char **argv) {
-int fd = open (argv[2], O_CREAT | O_RDWR, 0666);
 uint64_t size = 1024LL * 1024LL, off;
-int cnt = atoi(argv[3]), idx, err;
-int scale = atoi(argv[4]);
-int upd = atoi(argv[5]);
-int nthrds = atoi(argv[6]);
+int fd, scale, upd, nthrds;
+int cnt, idx, err;
 #ifndef _WIN32
 pthread_t *threads;
 #else
@@ -211,10 +208,16 @@ double start[3];
 float elapsed;
 int height;
 
-	if (argc < 2) {
+	if (argc < 7) {
 		fprintf (stderr, usage, argv[0]);
 		exit(1);
 	}
+
+	fd = open (argv[2], O_CREAT | O_RDWR, 0666);
+	cnt = atoi(argv[3]);
+	scale = atoi(argv[4]);
+	upd = atoi(argv[5]);
+	nthrds = atoi(argv[6]);
 
 	//	store interior nodes in first segment
 
