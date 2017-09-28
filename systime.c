@@ -192,7 +192,7 @@ int cnt = atoi(argv[3]), idx, err;
 int scale = atoi(argv[4]);
 int upd = atoi(argv[5]);
 int nthrds = atoi(argv[6]);
-#ifdef unix
+#ifndef _WIN32
 pthread_t *threads;
 #else
 HANDLE *threads;
@@ -247,7 +247,7 @@ int height;
 		exit(1);
 	}
 
-#ifdef unix
+#ifndef _WIN32
 	threads = malloc (nthrds * sizeof(pthread_t));
 #else
 	threads = GlobalAlloc (GMEM_FIXED|GMEM_ZEROINIT, nthrds * sizeof(HANDLE));
@@ -265,7 +265,7 @@ int height;
 		args[idx].upd = upd;
 		args[idx].cnt = cnt;
 		args[idx].fd = fd;
-#ifdef unix
+#ifndef _WIN32
 		if( err = pthread_create (threads + idx, NULL, execround, args + idx) )
 			fprintf(stderr, "Error creating thread %d\n", err);
 #else
@@ -275,7 +275,7 @@ int height;
 
 	// 	wait for termination
 
-#ifdef unix
+#ifndef _WIN32
 	for( idx = 0; idx < cnt; idx++ )
 		pthread_join (threads[idx], NULL);
 #else
