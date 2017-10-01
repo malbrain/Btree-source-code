@@ -95,6 +95,10 @@ typedef unsigned int		uint;
 #define BT_minpage		(1 << BT_minbits)	// minimum page size
 #define BT_maxpage		(1 << BT_maxbits)	// maximum page size
 
+#define BT_minsegbits	 17
+#define BT_minsegsize  (1ULL << BT_minsegbits)
+#define BT_maxsegsize  (1ULL << (32 + 4))  // 32 bit offset and 4 bit multiplier
+
 //	Number of levels to create in a new BTree
 
 #define MIN_lvl			2
@@ -184,7 +188,7 @@ typedef struct {
 		};
 		uint allocation[1];	// all elements above
 	};
-	uint8_t lvl, bits;		// level of page, zero = leaf, page size in bits
+	uint8_t lvl, bits, grp;	// level of page, zero = leaf, page size in bits, group size multiplier in bits
 	uint right, left;		// page offsets to find left/right page numbers
 	uint repl[1];			// page offset to find next page number
 #ifdef _WIN32
@@ -323,15 +327,21 @@ bool bt_installuint (uint *where, uint test, uint what) {
 //	the page state must be PageActive (i.e. zero)
 
 //  return zero if page is no longer active
-//	or it doesn't fit otherwise return
+//	or request doesn't fit; otherwise return
 //	the allocated offset
 
 ushort bt_allocpage(BtPage *page, ushort request) {
 uint amt = (request + BT_pagealloc - 1) & -BT_pagealloc;
 uint offset = page->max;
 
-	if ((offset + amt) << BT_pagebits < (1 << page->bits) )
-	  if (bt_installuint(page->allocation, offset, offset + amt))
+	//	does it fit?
+
+	if (((offset + amt) << BT_pagebits) > (1 << page->bits) )
+		return 0;
+
+	//	is the page still active?
+
+	if (bt_installuint(page->allocation, offset, offset + amt))
 		return offset;
 
 	return 0;
@@ -345,15 +355,19 @@ BtUid *uid = uidptr(page, off);
 	return (BtPage *)(mgr->mapbase[uid->seg] + ((uint64_t)uid->num << mgr->page_bits));
 }
 
-//	access next page version
+//	wait for access to newer page version
 //	WIN32 uses SRW lock
 
-BTERR bt_movepage (BtMgr *mgr, BtAccess *set) {
+BTERR bt_waitaccess (BtMgr *mgr, BtAccess *set) {
 
   while (!set->page->repl[0]) {
 #ifdef linux
 	sys_futex (set->page->repl, FUTEX_WAIT, 0, NULL, NULL, 0);
 #elif defined(_WIN32)
+	//	WIN32 sets the state to PageFwd
+	//	before setting the repl pageNo
+	//	and releasing the WriteLock
+
 	if (set->page->state != PageFwd)
 		AcquireSRWLockShared(set->page->rebuild);
 #else
@@ -364,6 +378,55 @@ BTERR bt_movepage (BtMgr *mgr, BtAccess *set) {
   set->page = bt_bindpage(mgr, set->page, set->page->repl[0]);
   set->version = set->page->max;
   return BTERR_ok;
+}
+
+//  extend BTree file into next segment
+
+bool nextSeg(BtMgr *mgr, uint32_t minSize) {
+uint64_t size = mgr->pagezero->segs[mgr->pagezero->nextseg - 1].size;
+uint64_t off = map->arena->segs[mgr->pagezero->nextseg - 1].off;
+uint32_t nextSeg = mgr->pagezero->nextseg;
+uint64_t nextSize;
+
+	nextSize = size * 2;	// double current size
+	off += size;
+
+	while (nextSize < minSize)
+	 	if (nextSize < BT_maxsegsize)
+			nextSize += nextSize;
+		else
+			fprintf(stderr, "newSeg segment overrun: %d\n", minSize), exit(1);
+
+	if (nextSize > BT_maxsegsize)
+		nextSize = BT_maxsegsize;
+
+#ifdef _WIN32
+	assert(__popcnt64(nextSize) == 1);
+#else
+	assert(__builtin_popcountll(nextSize) == 1);
+#endif
+
+	mgr->pagezero->segs[nextSeg].off = off;
+	mgr->pagezero->segs[nextSeg].size = nextSize;
+	mgr->pagezero->segs[nextSeg].nextObject.segment = nextSeg;
+	mgr->pagezero->segs[nextSeg].nextId.seg = nextSeg;
+
+	//  extend the disk file, windows does this automatically
+
+#ifndef _WIN32
+	if (map->hndl != -1)
+	  if (ftruncate(map->hndl, nextSize + off)) {
+		fprintf (stderr, "Unable to extend file %s to %" PRIu64 ", error = %d\n", map->arenaPath, nextSize + off, errno);
+		return false;
+	  }
+#endif
+
+	if (!mapSeg(map, nextSeg))
+		return false;
+
+	map->arena->currSeg = nextSeg;
+	map->numSeg = nextSeg + 1;
+	return true;
 }
 
 #if 0 // end of code conversion so far
