@@ -3,6 +3,8 @@ Btree-source-code
 
 A working project for High-concurrency B-tree source code in C.  You probably want to download the separate database project for the latest version.  Most C files compile under both Windows and Linux.
 
+An idea being investigated in the multi-root-node subdirectory removes the locking load on the root node by creating a read-only copy of the latest updated root version.  The root is updated out-of-band.
+
 New B-tree page management code using a skiplist instead of sorted arrays for key searching is under development in a sub-directory.  This approach removes the need for a latching protocol for page reading and writing.
 
 Note:  The most recent running multi-threaded/multi-process B-tree and ARTree code can be found in a separate repository:  https://github.com/malbrain/database.
